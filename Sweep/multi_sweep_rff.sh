@@ -11,4 +11,6 @@
 
 module load lang/python/anaconda/3.8.5-2021-AM
 
-srun python multi_sweep_rff.py --param_idx=$SLURM_ARRAY_TASK_ID --verbose="True" --NO_TRIALS=1 --significance_threshold=0.1
+SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/"
+
+srun python $SCRIPT_DIR/multi_sweep_rff.py --param_idx=$SLURM_ARRAY_TASK_ID --verbose="True" --NO_TRIALS=1 --significance_threshold=0.1

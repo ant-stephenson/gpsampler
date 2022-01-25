@@ -1,0 +1,80 @@
+import csv
+from itertools import product
+import numpy as np
+from scipy import linalg, stats
+from functools import partial
+
+import rff
+
+rng = np.random.default_rng()
+
+verbose = True
+
+NO_TRIALS = 1000
+significance_threshold = 0.1
+
+#no. of fourier features, can depend on other params
+Ds = lambda d, l, sigma, noise_var, N : [2**i for i in range(15)] 
+
+ds = [2] #input (x) dimensionality
+ls = [0.5] #length scale
+sigmas = [2.0] #kernel scale
+noise_vars = [0.04] #noise_variance
+Ns = [2**i for i in range(7,13)] #no. of data points
+
+filename = "output_sweep.csv"
+
+with open(filename, 'w', newline ='') as csvfile:
+    fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
+    writer = csv.DictWriter(csvfile, fieldnames = fieldnames)
+    writer.writeheader()
+    for tup in product(ds, ls, sigmas, noise_vars, Ns):
+        d, l, sigma, noise_var, N = tup
+        noise_sd = np.sqrt(noise_var)
+
+        cov_omega = np.eye(d)/l**2
+        my_k_true = partial(rff.k_true, sigma, l)
+
+        x = rng.standard_normal(size = (N,d))
+        theory_cov = np.array([[my_k_true(xp,xq) for xp in x] for xq in x])
+        theory_cov_noise = theory_cov + noise_var*np.eye(N)
+        L = linalg.cholesky(theory_cov_noise, lower = True)
+
+        errors = []
+        if verbose:
+            print("***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" % tup)
+        for D in Ds(*tup):
+            avg_approx_cov = np.zeros_like(theory_cov)
+            reject = 0
+            for j in range(NO_TRIALS):
+                omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
+
+                w = rng.standard_normal(D)
+                my_f = partial(rff.f, omega, D, w)
+                y = np.array([my_f(xx) for xx in x])*np.sqrt(sigma)
+                noise = rng.normal(scale=noise_sd, size=N)
+                y_noise = y + noise
+
+                spherical_y = linalg.solve_triangular(L, y_noise, lower = True)
+                res = stats.cramervonmises(spherical_y, 'norm', args=(0,1))
+                statistic = res.statistic
+                pvalue = res.pvalue
+                # pvalue unreliable (see doc) if estimating params
+                reject += int(pvalue < significance_threshold)
+
+                my_z = partial(rff.z, omega, D)
+                Z = np.array([my_z(xx) for xx in x])*np.sqrt(sigma)
+                avg_approx_cov += np.inner(Z, Z)
+
+            # record variance as well as mean?
+            reject /= NO_TRIALS
+            avg_approx_cov /= NO_TRIALS
+            err = np.linalg.norm(theory_cov - avg_approx_cov)
+            errors.append(err)
+
+            if verbose:
+                print("D = %d" % D)
+                print("Norm difference between average approximate and exact K: %.6f" % err)
+                print("%.2f%% rejected" % (reject*100))
+            
+            writer.writerow(dict(zip(fieldnames, tup + (D, err, reject))))

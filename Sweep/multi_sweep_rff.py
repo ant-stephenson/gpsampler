@@ -1,18 +1,16 @@
 import argparse
 import sweep_rff
 
-sweep_rff.param_sets = {}
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--param_idx", default=0, type=int)
     parser.add_argument("--verbose", default=True, type=bool)
-    parser.add_argument("--NO_TRIALS", default=1000, type=int)
+    parser.add_argument("--NO_TRIALS", default=1, type=int)
     parser.add_argument("--significance_threshold", default=0.1, type=float)
 
     args = parser.parse_args()
 
-    param_set = param_sets[args.param_idx]
+    param_set = {k:v for (k,v) in zip(sweep_rff.default_param_set.keys(), sweep_rff.param_sets[args.param_idx])}
 
     sweep_rff.run_sweep(
         **param_set,

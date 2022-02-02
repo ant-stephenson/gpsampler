@@ -31,7 +31,7 @@ generate_param_list = lambda d, l, sigma, noise_var, Ns: [[d], [l], [sigma], [no
 #         Ns = get_Ns()
 #         yield generate_param_list(d, l, sigma, noise_var, Ns)
 
-param_sets = {0: [[2], [0.5], [2.0], [0.04], [2**i for i in range(7,13)]], 1: [], 2: []}
+param_sets = {0: default_param_set.values(), 1: [], 2: []}
 
 def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1000, significance_threshold=0.1, param_index=0):
     filename = f"output_sweep_{param_index}.csv"

@@ -10,12 +10,26 @@ rng = np.random.default_rng()
 
 #no. of fourier features, can depend on other params
 Ds = lambda d, l, sigma, noise_var, N : [2**i for i in range(15)] 
+min_l = 1e-3
+max_l = 2.0
+size_l = 10
 default_param_set = {"ds" :[2], #input (x) dimensionality
-"ls" : [0.5], #length scale
-"sigmas" : [2.0], #kernel scale
-"noise_vars" : [0.04], #noise_variance
+"ls" : np.linspace(min_l, max_l, size_l), #length scale
+"sigmas" : [1.0], #kernel scale
+"noise_vars" : [0.00], #noise_variance
 "Ns" : [2**i for i in range(7,13)], #no. of data points
 }
+
+generate_param_list = lambda d, l, sigma, noise_var, Ns: [[d], [l], [sigma], [noise_var], Ns]
+
+# def generate_param_set(NO_RUNS):
+#     for _ in NO_RUNS:
+#         d = get_d()
+#         l = get_l()
+#         sigma = get_sigma()
+#         noise_var = get_noise_var()
+#         Ns = get_Ns()
+#         yield generate_param_list(d, l, sigma, noise_var, Ns)
 
 param_sets = {0: [[2], [0.5], [2.0], [0.04], [2**i for i in range(7,13)]], 1: [], 2: []}
 

@@ -33,8 +33,11 @@ generate_param_list = lambda d, l, sigma, noise_var, Ns: [[d], [l], [sigma], [no
 
 param_sets = {0: default_param_set.values(), 1: [], 2: []}
 
-def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1000, significance_threshold=0.1, param_index=0):
-    filename = f"output_sweep_{param_index}.csv"
+def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1000, significance_threshold=0.1, param_index=0, benchmark=False):
+    if benchmark:
+        filename = f"output_sweep_{param_index}_bench.csv"
+    else:
+        filename = f"output_sweep_{param_index}.csv"
 
     with open(filename, 'w', newline ='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
@@ -61,9 +64,12 @@ def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1000, sign
                 for j in range(NO_TRIALS):
                     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
 
-                    w = rng.standard_normal(D)
-                    my_f = partial(rff.f, omega, D, w)
-                    y = np.array([my_f(xx) for xx in x])*np.sqrt(sigma)
+                    if benchmark:
+                        y = rng.multivariate_normal(0, theory_cov, N)
+                    else:
+                        w = rng.standard_normal(D)
+                        my_f = partial(rff.f, omega, D, w)
+                        y = np.array([my_f(xx) for xx in x])*np.sqrt(sigma)
                     noise = rng.normal(scale=noise_sd, size=N)
                     y_noise = y + noise
 

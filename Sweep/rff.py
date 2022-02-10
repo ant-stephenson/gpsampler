@@ -8,6 +8,14 @@ k_true = lambda sigma, l, xp, xq : sigma*np.exp(-0.5*np.dot(xp-xq,xp-xq)/l**2) #
 z = lambda omega, D, x : np.sqrt(2/D)*np.ravel(np.column_stack((np.cos(np.dot(omega, x)),np.sin(np.dot(omega, x))))) #random features
 f = lambda omega, D, w, x : np.sum(w*z(omega, D, x)) #GP approximation
 
+def estimate_rff_kernel(X, D, ks, l):
+    N,d = X.shape
+    cov_omega = np.eye(d)/l**2
+    omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
+    Z = np.array([z(omega, D, xx) for xx in X])*np.sqrt(ks)
+    approx_cov = np.inner(Z, Z)
+    return approx_cov
+
 def generate_rff_data(data_size, xmean, xcov_diag, noise_var, kernelscale, lenscale, D):
     assert D % 2 == 0
     input_dim = xmean.shape[0]

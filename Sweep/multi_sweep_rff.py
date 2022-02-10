@@ -7,6 +7,7 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", default=True, type=bool)
     parser.add_argument("--NO_TRIALS", default=1, type=int)
     parser.add_argument("--significance_threshold", default=0.1, type=float)
+    parser.add_argument("--ncpus", default=1, type=int)
 
     args = parser.parse_args()
 
@@ -16,5 +17,6 @@ if __name__ == "__main__":
         **param_set,
         verbose = args.verbose,
         NO_TRIALS=args.NO_TRIALS,
-        significance_threshold=args.significance_threshold
+        significance_threshold=args.significance_threshold,
+        ncpus=args.ncpus
     )

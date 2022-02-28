@@ -4,7 +4,7 @@ from numpy.testing._private.utils import assert_array_less
 from gpybench import datasets as ds
 from gpybench.utils import get_off_diagonal, numpify, print_mean_std
 from gpybench.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
-from gpybench.maths import safe_logdet, Tr
+from gpytools.maths import safe_logdet, Tr, partial_svd_inv, low_rank_inv_approx, k_true, zrf, estimate_rff_kernel, estimate_rff_kernel_inv, f_gp_approx
 import gpytorch
 import torch
 import numpy as np
@@ -83,9 +83,9 @@ def test_KL_bounds(n: int) -> Tuple[float, float, float]:
     # KL_L = n/2 * (1/(1+M2/lam.min()) - 1 + np.log2(1 + M2/lam.max()))
     # KL_U = n/2 *(np.log2(1 + M2/lam.min()) - M2/lam.max())
     KL_L = 0
-    # KL_U = np.linalg.norm(Kinv)**2 * np.linalg.norm(E)**2/4
-    #better:
-    KL_U = Tr(Kinv) * M2/4
+    KL_U = np.linalg.norm(Kinv)**2 * np.linalg.norm(E)**2/4
+    #better? not sure if true...seems to hold empirically so far, but not better? Both scale with n
+    # KL_U = (Tr(Kinv) * M2)**2/4
 
     KL = kldiv(Khat, K)
 
@@ -100,95 +100,59 @@ for j, n in enumerate(sizes_n):
         gaps[j, i] = KL_U-KL
 
 print_mean_std(gaps, 1, sizes_n)
-# %% - Tr bound tightness: tight  - err scales with n
-# def test_Tr_bound(n):
-#     K, Khat, E = construct_kernels(n)
+#%% - construct RFF approx
+X = sampler.sample_covariates(n)
+x_star = sampler.sample_covariates(1)
+k_star = numpify(kernel)(X, x_star)
+D = int(np.sqrt(n))
+K = numpify(kernel)(X)
+Krff = estimate_rff_kernel(X, D, l, b)
+reg = 1e-3
+Krff += reg * np.eye(n)
+E = Krff-K
 
-#     M2 = np.linalg.norm(E, ord=2)
-#     lam,U = np.linalg.eigh(K)
-#     Kinv = U @ np.diag(1/lam) @ U.T
-#     TrKinvKhat = np.diag(Kinv @ Khat).sum()
+M2 = np.linalg.norm(E, ord=2)
 
-#     tr_err = n*(1-M2/lam.max()) - TrKinvKhat
-#     return tr_err
+#%% - sample z ~ N(0,1)
+z = np.random.multivariate_normal(np.zeros(n), np.eye(n))
 
+#%% - estimate approx. bias in GP draws
+L = np.linalg.cholesky(K)
+Lrff = np.linalg.cholesky(Krff)
 
-# tr_gaps = np.empty((len(sizes_n), n_trials))
-# for j, n in enumerate(sizes_n):
-#     for i in range(n_trials):
-#         tr_gaps[j, i] = test_Tr_bound(n)
+f = L @ z
+frff = Lrff @ z
 
-# print_mean_std(tr_gaps, 1, sizes_n)
-#%% logdet bound tightness: slack - err scales with n
-# def test_logdet_bound(n):
-#     K, Khat, E = construct_kernels(n)
+err = np.linalg.norm(f - frff)
+# %% - theoretical bound on bias (?)
+am = lambda m: b**m*(1+2*m/(d*l**2))**(-d/2)
+Elam1 = (n-1) * am(1) + b + (am(1)**2 - am(2))/am(1)
+bias2 = Elam1 * (2+M2/reg + 2*np.sqrt(1+M2/reg))
 
-#     M2 = np.linalg.norm(E, ord=2)
+# %% try again; compute objects: Khat = Krff = Urff Lrff Urff.T, Urff = U + V, Lrff = L + De
+# compute error: ||K^1/2 - Krff^1/2||_2
+nv = 1e-3
+lam, U = np.linalg.eigh(K)
+lrff, Urff = np.linalg.eigh(Krff)
+De = lrff-lam
+# to ensure terms should converge?
+De[lrff <= nv] = 0
+V = Urff - U
 
-#     lam,U = np.linalg.eigh(K)
-#     lhat = np.linalg.eigvalsh(Khat)
+sqrt_err = np.linalg.norm(U @ np.diag(np.sqrt(lam)) @ U.T - Urff @ np.diag(np.sqrt(lrff)) @ Urff.T, ord=2)
+# %% calculate error bound
+sqrt_err_bound = 0.5 * np.max(De/lam) + 3*np.max(np.sqrt(lam + De))
+print(sqrt_err)
+print(sqrt_err_bound)
+# %%
+fig,ax = plt.subplots()
+ax.plot(De)
+ax.plot(lam)
+ax.plot(lrff)
+ax.set(xscale="log", yscale="log")
+ax.legend(["d_i", "\lambda_i"])
 
-#     logdetKhatinvK = np.log(lam).sum()-np.log(lhat).sum()
-#     det_err = n*np.log(1+M2/lam.min())-logdetKhatinvK
-
-#     return det_err
-
-# ld_gaps = np.empty((len(sizes_n), n_trials))
-# for j, n in enumerate(sizes_n):
-#     for i in range(n_trials):
-#         ld_gaps[j, i] = test_logdet_bound(n)
-
-# print_mean_std(ld_gaps, 1, sizes_n)
-
-#%% - fDelta seems to upper bound, but using the Tr(Delta) bound DOESN'T work and scales VERY badly with n
-# def test_Delta_Tr_bound(n):
-#     K, Khat, E = construct_kernels(n)
-#     Delta = np.linalg.solve(K, E)
-
-#     MF = np.linalg.norm(E)
-
-#     lam,U = np.linalg.eigh(K)
-#     Kinv = U @ np.diag(1/lam) @ U.T
-
-#     TrKinvKhat = np.diag(Kinv @ Khat).sum()
-#     TrDelta_bound = np.linalg.norm(Kinv) * MF
-#     fDelta = n - Tr(Delta) + Tr(Delta @ Delta)
-#     fDelta_bound = n - TrDelta_bound + TrDelta_bound ** 2
-#     tr_err = fDelta_bound - TrKinvKhat
-
-#     return tr_err
-
-# trd_gaps = np.empty((len(sizes_n), n_trials))
-# for j, n in enumerate(sizes_n):
-#     for i in range(n_trials):
-#         trd_gaps[j, i] = test_Delta_Tr_bound(n)
-
-# print_mean_std(trd_gaps, 1, sizes_n)
-# %% detKhatinvK = np.exp(np.log(lam).sum()-np.log(lhat).sum())
-# Delta bound here does seem to work
-# def test_Delta_logdet_bound(n):
-#     K, Khat, E = construct_kernels(n)
-#     Delta = np.linalg.solve(K, E)
-
-#     MF = np.linalg.norm(E)
-
-#     lam,U = np.linalg.eigh(K)
-#     Kinv = U @ np.diag(1/lam) @ U.T
-
-# # fDelta = lambda a: np.exp(n*np.log(a) + safe_logdet(Delta)) - Tr(Delta) + 0.5*Tr(Delta)**2 - 0.5*Tr(Delta @ Delta)
-# # fDelta = fDelta(1)
-#     TrDelta_bound = np.linalg.norm(Kinv) * MF
-#     fDelta = np.log(1 + Tr(Delta) + 0.5*Tr(Delta)**2 - 0.5*Tr(Delta @ Delta))
-#     fDelta_bound = np.log(1 + TrDelta_bound)
-
-#     det_err = fDelta_bound - (safe_logdet(K) - safe_logdet(Khat))
-
-#     return det_err
-
-# ldd_gaps = np.empty((len(sizes_n), n_trials))
-# for j, n in enumerate(sizes_n):
-#     for i in range(n_trials):
-#         ldd_gaps[j, i] = test_Delta_logdet_bound(n)
-
-# print_mean_std(ldd_gaps, 1, sizes_n)
-
+#%% try CIQ method for comparison
+with gpytorch.settings.ciq_samples(state=True):
+    fciq = kernel(X).zero_mean_mvn_samples(1)
+# %%

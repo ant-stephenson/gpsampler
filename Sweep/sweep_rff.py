@@ -4,6 +4,8 @@ import numpy as np
 from scipy import linalg, stats
 from functools import partial
 from joblib import Parallel, delayed
+from gpybench.utils import check_exists
+import pathlib
 
 import rff
 
@@ -13,7 +15,7 @@ rng = np.random.default_rng()
 Ds = lambda d, l, sigma, noise_var, N : [2**i for i in range(15)] 
 min_l = 1e-3
 max_l = 2.0
-size_l = 10
+size_l = 2
 default_param_set = {"ds" :[2], #input (x) dimensionality
 "ls" : np.linspace(min_l, max_l, size_l), #length scale
 "sigmas" : [1.0], #kernel scale
@@ -34,7 +36,7 @@ generate_param_list = lambda d, l, sigma, noise_var, Ns: [[d], [l], [sigma], [no
 
 param_sets = {0: default_param_set.values(), 1: [], 2: []}
 
-def sweep_fun(tup, writer, fieldnames, NO_TRIALS, verbose, benchmark, significance_threshold):
+def sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold):
     d, l, sigma, noise_var, N = tup
     noise_sd = np.sqrt(noise_var)
 
@@ -86,26 +88,31 @@ def sweep_fun(tup, writer, fieldnames, NO_TRIALS, verbose, benchmark, significan
             print("Norm difference between average approximate and exact K: %.6f" % err)
             print("%.2f%% rejected" % (reject*100))
         
-        writer.writerow(dict(zip(fieldnames, tup + (D, err, reject))))
+        # writer.writerow(dict(zip(fieldnames, tup + (D, err, reject))))
+        row_str = str(tup + (D, err, reject))[1:-1]
+        print(row_str, file=csvfile, flush = True)
 
 def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2):
     if benchmark:
         filename = f"output_sweep_{param_index}_bench.csv"
     else:
         filename = f"output_sweep_{param_index}.csv"
+        
+    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
 
     with open(filename, 'w', newline ='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
-        writer = csv.DictWriter(csvfile, fieldnames = fieldnames)
-        writer.writeheader()
+        # writer = csv.DictWriter(csvfile, fieldnames = fieldnames)
+        # writer.writeheader()
+        print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
             Parallel(n_jobs=ncpus, require="sharedmem")(
-                delayed(sweep_fun)(tup, writer, fieldnames, NO_TRIALS, verbose, benchmark, significance_threshold)
+                delayed(sweep_fun)(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
                 for tup in product(ds, ls, sigmas, noise_vars, Ns)
             )
         else:
             for tup in product(ds, ls, sigmas, noise_vars, Ns):
-                sweep_fun(tup, writer, fieldnames, NO_TRIALS, verbose, benchmark, significance_threshold)
+                sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
 
 if __name__ == "__main__":
     run_sweep(**default_param_set)

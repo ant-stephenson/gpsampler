@@ -4,7 +4,7 @@ from numpy.testing._private.utils import assert_array_less
 from gpybench import datasets as ds
 from gpybench.utils import get_off_diagonal, numpify, print_mean_std
 from gpybench.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
-from gpybench.maths import safe_logdet, Tr
+from gpytools.maths import safe_logdet, Tr
 import gpytorch
 import torch
 import numpy as np

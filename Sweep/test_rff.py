@@ -2,12 +2,12 @@
 from numpy.linalg.linalg import _assert_finite
 from numpy.testing._private.utils import assert_array_less
 from gpybench import datasets as ds
-from gpybench.utils import get_off_diagonal, numpify, print_mean_std
+from gpybench.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
 from gpybench.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
 from gpytools.maths import safe_logdet, Tr, partial_svd_inv, low_rank_inv_approx, k_true, zrf, estimate_rff_kernel, estimate_rff_kernel_inv, f_gp_approx, am
 import gpybench.plotting as gplt
 import gpytorch
-from gpytorch.utils import contour_integral_quad, isnotebook
+from gpytorch.utils import contour_integral_quad
 import torch
 import numpy as np
 import matplotlib.pyplot as plt

@@ -6,13 +6,24 @@ from functools import partial
 from joblib import Parallel, delayed
 from gpybench.utils import check_exists
 import pathlib
+from typing import Tuple, TextIO
+import torch
 
 import rff
 
 rng = np.random.default_rng()
 
 #no. of fourier features, can depend on other params
-Ds = lambda d, l, sigma, noise_var, N : [2**i for i in range(15)] 
+def Ds(d, l, sigma, noise_var, N):
+    max_D = int(np.log2(N**2))
+    _Ds = [2**i for i in range(max_D)]
+    return _Ds
+def Js(d, l, sigma, noise_var, N):
+    # leave Q as default for now
+    max_J = int(np.log2(N))
+    _Js = [2**i for i in range(max_J)]
+    return _Js
+
 min_l = 1e-3
 max_l = 2.0
 size_l = 2
@@ -36,11 +47,9 @@ generate_param_list = lambda d, l, sigma, noise_var, Ns: [[d], [l], [sigma], [no
 
 param_sets = {0: default_param_set.values(), 1: [], 2: []}
 
-def sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold):
+def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool, benchmark: bool, significance_threshold: float):
     d, l, sigma, noise_var, N = tup
-    noise_sd = np.sqrt(noise_var)
 
-    cov_omega = np.eye(d)/l**2
     my_k_true = partial(rff.k_true, sigma, l)
 
     x = rng.standard_normal(size = (N,d))
@@ -48,23 +57,27 @@ def sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshol
     theory_cov_noise = theory_cov + noise_var*np.eye(N)
     L = linalg.cholesky(theory_cov_noise, lower = True)
 
+    if method == "rff":
+        _Ds = Ds
+        sampling_function = rff.sample_rff_from_x
+    elif method == "ciq":
+        _Ds = Js
+        sampling_function = rff.sample_ciq_from_x
+    else:
+        raise ValueError("Options supported are `rff` or `ciq`")
+
     errors = []
     if verbose:
         print("***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" % tup)
-    for D in Ds(*tup):
+    for D in _Ds(*tup):
         avg_approx_cov = np.zeros_like(theory_cov)
         reject = 0
         for j in range(NO_TRIALS):
-            omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
-
             if benchmark:
-                y = rng.multivariate_normal(0, theory_cov, N)
+                y_noise = rng.multivariate_normal(0, theory_cov, N)
+                approx_cov = theory_cov_noise
             else:
-                w = rng.standard_normal(D)
-                my_f = partial(rff.f, omega, D, w)
-                y = np.array([my_f(xx) for xx in x])*np.sqrt(sigma)
-            noise = rng.normal(scale=noise_sd, size=N)
-            y_noise = y + noise
+                y_noise, approx_cov = sampling_function(x, sigma,noise_var, l, rng, D)
 
             spherical_y = linalg.solve_triangular(L, y_noise, lower = True)
             res = stats.cramervonmises(spherical_y, 'norm', args=(0,1))
@@ -73,9 +86,7 @@ def sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshol
             # pvalue unreliable (see doc) if estimating params
             reject += int(pvalue < significance_threshold)
 
-            my_z = partial(rff.z, omega, D)
-            Z = np.array([my_z(xx) for xx in x])*np.sqrt(sigma)
-            avg_approx_cov += np.inner(Z, Z)
+            avg_approx_cov += approx_cov
 
         # record variance as well as mean?
         reject /= NO_TRIALS
@@ -88,26 +99,23 @@ def sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshol
             print("Norm difference between average approximate and exact K: %.6f" % err)
             print("%.2f%% rejected" % (reject*100))
         
-        # writer.writerow(dict(zip(fieldnames, tup + (D, err, reject))))
         row_str = str(tup + (D, err, reject))[1:-1]
         print(row_str, file=csvfile, flush = True)
 
-def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2):
+def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2, method="rff"):
     if benchmark:
-        filename = f"output_sweep_{param_index}_bench.csv"
+        filename = f"output_sweep_{method}_{param_index}_bench.csv"
     else:
-        filename = f"output_sweep_{param_index}.csv"
+        filename = f"output_sweep_{method}_{param_index}.csv"
         
     filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
 
     with open(filename, 'w', newline ='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
-        # writer = csv.DictWriter(csvfile, fieldnames = fieldnames)
-        # writer.writeheader()
         print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
             Parallel(n_jobs=ncpus, require="sharedmem")(
-                delayed(sweep_fun)(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
+                delayed(sweep_fun)(tup, method, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
                 for tup in product(ds, ls, sigmas, noise_vars, Ns)
             )
         else:
@@ -115,4 +123,4 @@ def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, signifi
                 sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
 
 if __name__ == "__main__":
-    run_sweep(**default_param_set)
+    run_sweep(**default_param_set, method="ciq")

@@ -195,7 +195,7 @@ def sample_ciq_from_x(x: np.ndarray, sigma: float,noise_var: float,l: float, rng
     solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)).evaluate_kernel(), torch.tensor(u.reshape(-1,1)), max_lanczos_iter=J, num_contour_quadrature=Q)
     f = (solves * weights).sum(0).detach().numpy().squeeze()
     y_noise = f + rng.normal(0.0, np.sqrt(noise_var), n)
-    approx_cov = np.nan * np.ones((n,n))
+    approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
     return  y_noise, approx_cov
 
 if __name__ == '__main__':

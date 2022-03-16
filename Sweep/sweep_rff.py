@@ -1,15 +1,13 @@
-import csv
 from itertools import product
 import numpy as np
+from typing import Tuple, TextIO
 from scipy import linalg, stats
-from functools import partial
+from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
 from gpybench.utils import check_exists
 import pathlib
-from typing import Tuple, TextIO
-import torch
 
-import rff
+import rff.Sweep.rff as rff
 
 rng = np.random.default_rng()
 
@@ -50,10 +48,8 @@ param_sets = {0: default_param_set.values(), 1: [], 2: []}
 def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool, benchmark: bool, significance_threshold: float):
     d, l, sigma, noise_var, N = tup
 
-    my_k_true = partial(rff.k_true, sigma, l)
-
     x = rng.standard_normal(size = (N,d))
-    theory_cov = np.array([[my_k_true(xp,xq) for xp in x] for xq in x])
+    theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
     theory_cov_noise = theory_cov + noise_var*np.eye(N)
     L = linalg.cholesky(theory_cov_noise, lower = True)
 
@@ -71,7 +67,7 @@ def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose:
         print("***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" % tup)
     for D in _Ds(*tup):
         avg_approx_cov = np.zeros_like(theory_cov)
-        reject = 0
+        reject = 0.0
         for j in range(NO_TRIALS):
             if benchmark:
                 y_noise = rng.multivariate_normal(0, theory_cov, N)

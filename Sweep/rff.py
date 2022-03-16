@@ -1,5 +1,6 @@
 import numpy as np
 from functools import partial
+from scipy.special import ellipk, ellipj
 import torch
 import gpytorch
 from gpytorch.utils import contour_integral_quad
@@ -27,14 +28,58 @@ def construct_kernels(l: float, b:float=1.0) -> gpytorch.kernels.Kernel:
     kernel.outputscale = b
     return kernel
 
-def estimate_ciq_kernel(X, J, Q, ks, l) -> np.ndarray:
+def approx_extreme_eigs(X, noise_var=None):
+    max_eig = X.shape[0]
+    if noise_var is not None:
+        min_eig = noise_var
+    else:
+        min_eig = 1/max_eig
+    return min_eig, max_eig
     raise NotImplementedError
+        
+def matsqrt(X, J, Q, reg=1e-6):
+    """Calculates the matrix sqrt of a symmetric matrix X using method 3 in
+    Hale2008. Note that this implementation is not computationally efficient as
+    it directly inverts an nxn matrix. 
+    Assumes we have X = X + s_n^2I
+
+    Args:
+        X (_type_): _description_
+        J (_type_): _description_
+        Q (_type_): _description_
+        reg (_type_, optional): _description_. Defaults to 1e-6.
+
+    Returns:
+        _type_: _description_
+    """
+    n = X.shape[0]
+    I = np.eye(n)
+    m,M = approx_extreme_eigs(X, reg)
+    k2 = m/M
+    Kp = ellipk(1- k2)
+    # for N in range(5,25,5):
+    for N in [Q]:
+        t = 1j * (np.arange(1, N + 1) - 0.5) * Kp / N
+        sn, cn, dn, _ = ellipj(np.imag(t), 1 - k2)
+        cn = 1.0 / cn
+        dn = dn * cn
+        sn = 1j * sn * cn
+        w = np.sqrt(m) * sn
+        dzdt = cn * dn
+        S = np.zeros_like(X)
+        for j in range(N):
+            S = S - np.linalg.solve(X-w[j]**2 * I, I) * dzdt[j]
+        S = -2 * Kp * np.sqrt(m) / (np.pi * N) * X @ S
+    return S
+
+def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
     kernel = construct_kernels(l, ks)
     n, d = X.shape
     J = int(np.sqrt(n) * np.log(n))
     Q = int(np.log(n))
-    solves, weights, _, _ = contour_integral_quad(kernel(X).evaluate_kernel(), torch.eye(n).double(), max_lanczos_iter=J, num_contour_quadrature=Q)
-    Ksqrt = (solves * weights).sum(0)
+    K = kernel(X).detach().numpy()
+    rootK = matsqrt(K, J, Q, nv)
+    return rootK
 
 def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, J: int, Q: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP

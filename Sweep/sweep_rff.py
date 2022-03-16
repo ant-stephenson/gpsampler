@@ -175,7 +175,7 @@ def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, signifi
             )
         else:
             for tup in product(ds, ls, sigmas, noise_vars, Ns):
-                sweep_fun(tup, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
+                sweep_fun(tup, method, csvfile, NO_TRIALS, verbose, benchmark, significance_threshold)
 
 if __name__ == "__main__":
     run_sweep(**default_param_set, method="ciq")

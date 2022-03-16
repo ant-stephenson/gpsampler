@@ -12,7 +12,7 @@ k_true = lambda sigma, l, xp, xq : sigma*np.exp(-0.5*np.dot(xp-xq,xp-xq)/l**2) #
 z = lambda omega, D, x : np.sqrt(2/D)*np.ravel(np.column_stack((np.cos(np.dot(omega, x)),np.sin(np.dot(omega, x))))) #random features
 f = lambda omega, D, w, x : np.sum(w*z(omega, D, x)) #GP approximation
 
-def estimate_rff_kernel(X, D, ks, l) -> np.ndarray:
+def estimate_rff_kernel(X: np.ndarray, D: int, ks: float, l: float) -> np.ndarray:
     N,d = X.shape
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
@@ -20,7 +20,7 @@ def estimate_rff_kernel(X, D, ks, l) -> np.ndarray:
     approx_cov = np.inner(Z, Z)
     return approx_cov
 
-def construct_kernels(l, b=1):
+def construct_kernels(l: float, b:float=1.0) -> gpytorch.kernels.Kernel:
     kernel = gpytorch.kernels.RBFKernel()
     kernel.lengthscale = l
     kernel = gpytorch.kernels.ScaleKernel(kernel)
@@ -36,7 +36,24 @@ def estimate_ciq_kernel(X, J, Q, ks, l) -> np.ndarray:
     solves, weights, _, _ = contour_integral_quad(kernel(X).evaluate_kernel(), torch.eye(n).double(), max_lanczos_iter=J, num_contour_quadrature=Q)
     Ksqrt = (solves * weights).sum(0)
 
-def generate_ciq_data(n, xmean, xcov_diag, noise_var, kernelscale, lenscale, J, Q):
+def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, J: int, Q: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """ Generates a data sample from a MVN and a sample from an approximate GP
+    using CIQ to approximate K^1/2 b
+
+    Args:
+        n (int): Length of sample
+        xmean (np.ndarray): Mean of x distribution
+        xcov_diag (np.ndarray): Variances of x values
+        noise_var (float): Noise variance of GP
+        kernelscale (float): scaling factor for GP kernel
+        lenscale (float): RBF lengthscale
+        J (int): # Lanczsos iterations
+        Q (int): # Quadrature points
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: sampled x values, noise-free
+   sample and noisy GP sample
+    """
     input_dim = xmean.shape[0]
     assert input_dim == xcov_diag.shape[0]
 
@@ -51,13 +68,28 @@ def generate_ciq_data(n, xmean, xcov_diag, noise_var, kernelscale, lenscale, J, 
     return x, sample, noisy_sample 
 
 
-def generate_rff_data(data_size, xmean, xcov_diag, noise_var, kernelscale, lenscale, D):
+def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """ Generates a data sample from a MVN and a sample from an approximate GP using RFF
+
+    Args:
+        n (int): Length of sample
+        xmean (np.ndarray): Mean of x distribution
+        xcov_diag (np.ndarray): Variances of x values
+        noise_var (float): Noise variance of GP
+        kernelscale (float): scaling factor for GP kernel
+        lenscale (float): RBF lengthscale
+        D (int): # RFF
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: sampled x values, noise-free
+   sample and noisy GP sample
+    """
     assert D % 2 == 0
     input_dim = xmean.shape[0]
     assert input_dim == xcov_diag.shape[0]
     
     xcov = np.diag(xcov_diag)
-    x = rng.multivariate_normal(xmean, xcov, data_size)
+    x = rng.multivariate_normal(xmean, xcov, n)
 
     cov_omega = np.eye(input_dim)/lenscale**2 #covariance matrix for fourier transform of kernel
     omega = rng.multivariate_normal(np.zeros(input_dim), cov_omega, D//2) #sample from kernel spectral density
@@ -65,7 +97,7 @@ def generate_rff_data(data_size, xmean, xcov_diag, noise_var, kernelscale, lensc
 
     my_f = partial(f, omega, D, w) #GP approx as function of only x
     sample = np.array([my_f(xx) for xx in x])*np.sqrt(kernelscale)
-    noisy_sample = sample + rng.normal(0.0, np.sqrt(noise_var), data_size)
+    noisy_sample = sample + rng.normal(0.0, np.sqrt(noise_var), n)
     return x, sample, noisy_sample
 
 def sample_rff_from_x(x: np.ndarray, sigma: float,noise_var: float,l: float, rng: np.random.Generator, D: int) -> Tuple[np.ndarray, np.ndarray]:

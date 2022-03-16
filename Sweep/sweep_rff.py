@@ -1,24 +1,49 @@
-import csv
 from itertools import product
 import numpy as np
+from typing import Tuple, TextIO
 from scipy import linalg, stats
-from functools import partial
+from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
 from gpybench.utils import check_exists
 import pathlib
-from typing import Tuple, TextIO
-import torch
 
-import rff
+import rff.Sweep.rff as rff
 
 rng = np.random.default_rng()
 
 #no. of fourier features, can depend on other params
 def Ds(d, l, sigma, noise_var, N):
+    """ creates array of #rff to use for different experiments, based on the
+    input size N. Maxes out at N^2
+
+    Args:
+        d (_type_): _description_
+        l (_type_): _description_
+        sigma (_type_): _description_
+        noise_var (_type_): _description_
+        N (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
     max_D = int(np.log2(N**2))
     _Ds = [2**i for i in range(max_D)]
     return _Ds
+
 def Js(d, l, sigma, noise_var, N):
+    """ creates array of #lanczsos iter to use for different experiments based
+    on the input size N. Maxes out at N.
+
+    Args:
+        d (_type_): _description_
+        l (_type_): _description_
+        sigma (_type_): _description_
+        noise_var (_type_): _description_
+        N (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
     # leave Q as default for now
     max_J = int(np.log2(N))
     _Js = [2**i for i in range(max_J)]
@@ -47,13 +72,26 @@ generate_param_list = lambda d, l, sigma, noise_var, Ns: [[d], [l], [sigma], [no
 
 param_sets = {0: default_param_set.values(), 1: [], 2: []}
 
-def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool, benchmark: bool, significance_threshold: float):
+def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool, benchmark: bool, significance_threshold: float) -> None:
+    """ Run experiment over a tuple of parameters NO_TRIALS times, writing to a
+    csvfile. Supports RFF and CIQ methods.
+
+    Args:
+        tup (Tuple): (d, l, sigma, noise_var, N)
+        method (str): "rff" or "ciq"
+        csvfile (TextIO): path to an open csvfile to write to
+        NO_TRIALS (int): #repeat experiments
+        verbose (bool): Print to console option
+        benchmark (bool): deprecated
+        significance_threshold (float): alpha
+
+    Raises:
+        ValueError: If method other than "rff" or "ciq" used
+    """
     d, l, sigma, noise_var, N = tup
 
-    my_k_true = partial(rff.k_true, sigma, l)
-
     x = rng.standard_normal(size = (N,d))
-    theory_cov = np.array([[my_k_true(xp,xq) for xp in x] for xq in x])
+    theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
     theory_cov_noise = theory_cov + noise_var*np.eye(N)
     L = linalg.cholesky(theory_cov_noise, lower = True)
 
@@ -71,7 +109,7 @@ def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose:
         print("***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" % tup)
     for D in _Ds(*tup):
         avg_approx_cov = np.zeros_like(theory_cov)
-        reject = 0
+        reject = 0.0
         for j in range(NO_TRIALS):
             if benchmark:
                 y_noise = rng.multivariate_normal(0, theory_cov, N)
@@ -102,7 +140,24 @@ def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose:
         row_str = str(tup + (D, err, reject))[1:-1]
         print(row_str, file=csvfile, flush = True)
 
-def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2, method="rff"):
+def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2, method="rff") -> None:
+    """ Runs experiments over all sets of parameters. Runs in parallel if
+    specified. Calls sweep_fun() for each parameter set.
+
+    Args:
+        ds (_type_): Array of dimensions to test over
+        ls (_type_): Array of lengthscales to test over
+        sigmas (_type_): Array of kernelscales to test over
+        noise_vars (_type_): Array of noise variances to test over
+        Ns (_type_): Array of sample sizes to test over
+        verbose (bool, optional): Print to console?. Defaults to True.
+        NO_TRIALS (int, optional): #Repeats. Defaults to 1.
+        significance_threshold (float, optional): alpha. Defaults to 0.1.
+        param_index (int, optional): Experiment label - currently not used effectively. Defaults to 0.
+        benchmark (bool, optional): deprecated. Defaults to False.
+        ncpus (int, optional): Number of CPUs to use. Defaults to 2.
+        method (str, optional): "rff" or "ciq". Defaults to "rff".
+    """
     if benchmark:
         filename = f"output_sweep_{method}_{param_index}_bench.csv"
     else:

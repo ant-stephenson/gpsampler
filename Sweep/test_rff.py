@@ -148,7 +148,7 @@ rootKrff = Urff @ np.diag(np.sqrt(lrff)) @ Urff.T
 
 Delta = U @ np.diag(1/lam) @ U.T @ E
 
-sqrt_err = np.linalg.norm(rootK - rootKrff, ord=2)
+sqrt_err_rff = np.linalg.norm(rootK - rootKrff, ord=2)
 
 #%% error in draws
 f = rootK @ z
@@ -170,11 +170,11 @@ with gplt.LaTeX() as _:
     plt.legend(["RFF err", "CIQ err"])
     plt.xlabel("n")
     plt.ylabel("$f_{true}-f_{approx}$")
-gplt.save_fig(path, "GP_draw_error_comp", suffix="jpg", show=True)
+# gplt.save_fig(path, "GP_draw_error_comp", suffix="jpg", show=True)
 # %% calculate error bound
 # sqrt_err_bound = 0.5 * np.max(De/lam) + 3*np.max(np.sqrt(lam + De))
 sqrt_err_bound = np.sqrt(np.linalg.norm(K-Krff, ord=2))
-print(sqrt_err)
+print(sqrt_err_rff)
 print(sqrt_err_bound)
 # %%
 with gplt.LaTeX() as _:
@@ -202,4 +202,9 @@ Drange = [2**i for i in range(int(0.5*np.log(n)/np.log(2)), int(2*np.log(n)/np.l
 kl = np.empty(len(Drange))
 for i,Di in enumerate(Drange):
     kl[i]= test_KL(Di)
+# %% test ciq sqrt formation
+import rff.Sweep.rff as rff
+rootKciq = rff.estimate_ciq_kernel(X, J, Q, b, ls)
+sqrt_err_ciq = np.linalg.norm(rootK - rootKciq, ord=2)
+np.linalg.norm(K - rootKciq @ rootKciq)
 # %%

@@ -15,6 +15,6 @@ source $SCRIPT_DIR/projenv/bin/activate
 
 module load lang/python/anaconda/3.8.5-2021-AM
 
-python $SCRIPT_DIR/Sweep/multi_sweep_rff.py --param_idx=$SLURM_ARRAY_TASK_ID --verbose="True" --NO_TRIALS=1000 --significance_threshold=0.1 --ncpus=$SLURM_CPUS_PER_TASK --method=ciq
+python $SCRIPT_DIR/rff/Sweep/multi_sweep_rff.py --param_idx=$SLURM_ARRAY_TASK_ID --verbose="True" --NO_TRIALS=1000 --significance_threshold=0.1 --ncpus=$SLURM_CPUS_PER_TASK --method=ciq
 
 deactivate

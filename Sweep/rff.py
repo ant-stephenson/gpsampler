@@ -117,10 +117,20 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     x = rng.multivariate_normal(xmean, xcov, n)
     u = rng.standard_normal(n)
 
-    kernel = construct_kernels(lenscale, kernelscale)
-    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)).evaluate_kernel(
-    ), torch.tensor(u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
-    f = (solves * weights).sum(0).detach().numpy()
+
+    checkpoint_sizes = [int(nn) for nn in np.ceil(n / 2**np.arange(0, np.floor(np.log2(n))))]
+    for checkpoint_size in checkpoint_sizes:
+        try:
+            kernel = construct_kernels(lenscale, kernelscale)
+            with gpytorch.beta_features.checkpoint_kernel(checkpoint_size):
+                solves, weights, _, _ = contour_integral_quad(kernel(torch.as_tensor(x)), torch.as_tensor(u.reshape(-1, 1)), 
+                                                              max_lanczos_iter=J, num_contour_quadrature=Q)
+                break
+        except RuntimeError:
+            # Assume CUDA OOM is cause
+            torch.cuda.empty_cache()
+            pass
+    f = (solves * weights).sum(0).detach().cpu().numpy()
     noisy_sample = f + rng.normal(0.0, np.sqrt(noise_var), n)
     return x, f, noisy_sample
 

@@ -118,11 +118,11 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     u = rng.standard_normal(n)
 
     kernel = construct_kernels(lenscale, kernelscale)
-    solves, weights, _, _ = contour_integral_quad(kernel(x).evaluate_kernel(
-    ), torch.tensor(u), max_lanczos_iter=J, num_contour_quadrature=Q)
+    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)).evaluate_kernel(
+    ), torch.tensor(u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
     f = (solves * weights).sum(0).detach().numpy()
     noisy_sample = f + rng.normal(0.0, np.sqrt(noise_var), n)
-    return x, sample, noisy_sample
+    return x, f, noisy_sample
 
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

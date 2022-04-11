@@ -135,7 +135,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     if failure:
         print(checkpoint_size)
         raise re
-    sample = (solves * weights).sum(0)
+    sample = (solves * weights).sum(0).detach().numpy()
     return x, sample
 
 

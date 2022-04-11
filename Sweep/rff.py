@@ -113,16 +113,30 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     input_dim = xmean.shape[0]
     assert input_dim == xcov_diag.shape[0]
 
-    xcov = np.diag(xcov_diag)
-    x = rng.multivariate_normal(xmean, xcov, n)
+    x = torch.randn(n, dtype=torch.double) * xcov_diag[0]
     u = rng.standard_normal(n)
 
-    kernel = construct_kernels(lenscale, kernelscale)
-    solves, weights, _, _ = contour_integral_quad(kernel(x).evaluate_kernel(
-    ), torch.tensor(u), max_lanczos_iter=J, num_contour_quadrature=Q)
-    f = (solves * weights).sum(0).detach().numpy()
-    noisy_sample = f + rng.normal(0.0, np.sqrt(noise_var), n)
-    return x, sample, noisy_sample
+    f_kernel = construct_kernels(lenscale, kernelscale)
+    kernel = f_kernel(x).add_jitter(noise_var)
+    checkpoint_sizes = [int(nn) for nn in np.ceil(
+        n / 2**np.arange(0, np.floor(np.log2(n))))]
+    failure = True
+    for checkpoint_size in checkpoint_sizes:
+        try:
+            with gpytorch.beta_features.checkpoint_kernel(checkpoint_size):
+                solves, weights, _, _ = contour_integral_quad(kernel(x), torch.as_tensor(u.reshape(-1, 1)),
+                                                              max_lanczos_iter=J, num_contour_quadrature=Q)
+                failure = False
+                break
+        except RuntimeError as re:
+            # Assume CUDA OOM is cause
+            torch.cuda.empty_cache()
+            pass
+    if failure:
+        print(checkpoint_size)
+        raise re
+    sample = (solves * weights).sum(0)
+    return x, sample
 
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -208,24 +222,28 @@ def sample_ciq_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, r
     u = rng.standard_normal(n)
 
     kernel = construct_kernels(l, sigma)
-    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)).evaluate_kernel(
-    ), torch.tensor(u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
-    f = (solves * weights).sum(0).detach().numpy().squeeze()
-    y_noise = f + rng.normal(0.0, np.sqrt(noise_var), n)
-    approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
+    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)), torch.tensor(
+        u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
+    f = (solves * weights).sum(0).squeeze()
+    y_noise = (f + torch.sqrt(torch.tensor(noise_var))
+               * torch.randn(n)).detach().numpy()
+    # approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
+    approx_cov = np.nan
     return y_noise, approx_cov
 
 
 if __name__ == '__main__':
-    N = 1000  # no. of data points
-    d = 10  # input (x) dimensionality
+    N = 500000  # no. of data points
+    d = 2  # input (x) dimensionality
     D = 1000  # no.of fourier features
+    J = int(np.sqrt(N) * np.log(N))
+    Q = int(np.log(N))
     l = 1.1  # lengthscale
     sigma = 0.7  # kernel scale
     noise_var = 0.2  # noise variance
 
     xmean = np.zeros(d)
-    xcov_diag = np.full(d, 1.0/d)
+    xcov_diag = np.ones(d)/d
 
     print(
         """
@@ -246,8 +264,8 @@ lenscale %.2f
         )
     )
 
-    x, sample, noisy_sample = generate_rff_data(
-        N, xmean, xcov_diag, noise_var, sigma, l, D)
+    x, sample, noisy_sample = generate_ciq_data(
+        N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)
     # np.savetxt("noisy_sample.out.gz", noisy_sample)

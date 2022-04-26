@@ -8,7 +8,9 @@ from typing import Tuple, Optional
 
 
 rng = np.random.default_rng()
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor 
 
+torch.set_default_tensor_type(T_TYPE)
 
 def k_true(sigma, l, xp, xq): return sigma * \
     np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
@@ -30,9 +32,15 @@ def estimate_rff_kernel(X: np.ndarray, D: int, ks: float, l: float) -> np.ndarra
 
 def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
     kernel = gpytorch.kernels.RBFKernel()
-    kernel.lengthscale = l
     kernel = gpytorch.kernels.ScaleKernel(kernel)
-    kernel.outputscale = b
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1:
+        kernel = gpytorch.kernels.MultiDeviceKernel(kernel, device_ids=range(n_gpus), output_device="cuda:0")
+        kernel.base_kernel.base_kernel.lengthscale = l
+        kernel.base_kernel.outputscale = b
+    else:
+        kernel.base_kernel.lengthscale = l
+        kernel.outputscale = b
     return kernel
 
 
@@ -92,7 +100,8 @@ def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
     return np.real(rootK @ rootK)
 
 
-def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, J: int, Q: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, 
+                     lenscale: float, J: int, Q: int, checkpoint_size: int=1500) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP
     using CIQ to approximate K^1/2 b
 
@@ -105,6 +114,9 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
         lenscale (float): RBF lengthscale
         J (int): # Lanczsos iterations
         Q (int): # Quadrature points
+        checkpoint_size (int): Kernel checkpointing size. Larger is faster, but more memory.
+                               0 means no checkpointing and should be used if possible.
+                               Otherwise choose largest value that memory allows.
 
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: sampled x values, noise-free
@@ -113,16 +125,22 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     input_dim = xmean.shape[0]
     assert input_dim == xcov_diag.shape[0]
 
-    xcov = np.diag(xcov_diag)
-    x = rng.multivariate_normal(xmean, xcov, n)
+    cov_diag = torch.as_tensor(xcov_diag[0].reshape((1, -1)))
+    mean = torch.as_tensor(xmean.reshape((1, -1)))
+    x = torch.randn(n, input_dim) * cov_diag + mean
     u = rng.standard_normal(n)
 
-    kernel = construct_kernels(lenscale, kernelscale)
-    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)).evaluate_kernel(
-    ), torch.tensor(u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
-    f = (solves * weights).sum(0).detach().numpy()
-    noisy_sample = f + rng.normal(0.0, np.sqrt(noise_var), n)
-    return x, f, noisy_sample
+    f_kernel = construct_kernels(lenscale, kernelscale)
+    diag = gpytorch.lazy.DiagLazyTensor(torch.ones(n) * noise_var)
+    kernel = f_kernel(x) + diag
+
+    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size):
+        solves, weights, _, _ = contour_integral_quad(kernel, torch.as_tensor(u.reshape(-1, 1)),
+                                                        max_lanczos_iter=J, num_contour_quadrature=Q)
+    solves = solves.detach().cpu()
+    weights = weights.detach().cpu()
+    sample = (solves * weights).sum(0).numpy()
+    return x.cpu().numpy(), sample
 
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -208,24 +226,28 @@ def sample_ciq_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, r
     u = rng.standard_normal(n)
 
     kernel = construct_kernels(l, sigma)
-    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)).evaluate_kernel(
-    ), torch.tensor(u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
-    f = (solves * weights).sum(0).detach().numpy().squeeze()
-    y_noise = f + rng.normal(0.0, np.sqrt(noise_var), n)
-    approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
+    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)), torch.tensor(
+        u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
+    f = (solves * weights).sum(0).squeeze()
+    y_noise = (f + torch.sqrt(torch.tensor(noise_var))
+               * torch.randn(n)).detach().numpy()
+    # approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
+    approx_cov = np.nan
     return y_noise, approx_cov
 
 
 if __name__ == '__main__':
-    N = 1000  # no. of data points
-    d = 10  # input (x) dimensionality
+    N = 500000  # no. of data points
+    d = 2  # input (x) dimensionality
     D = 1000  # no.of fourier features
+    J = int(np.sqrt(N) * np.log(N))
+    Q = int(np.log(N))
     l = 1.1  # lengthscale
     sigma = 0.7  # kernel scale
     noise_var = 0.2  # noise variance
 
     xmean = np.zeros(d)
-    xcov_diag = np.full(d, 1.0/d)
+    xcov_diag = np.ones(d)/d
 
     print(
         """
@@ -246,8 +268,8 @@ lenscale %.2f
         )
     )
 
-    x, sample, noisy_sample = generate_rff_data(
-        N, xmean, xcov_diag, noise_var, sigma, l, D)
+    x, sample, noisy_sample = generate_ciq_data(
+        N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)
     # np.savetxt("noisy_sample.out.gz", noisy_sample)

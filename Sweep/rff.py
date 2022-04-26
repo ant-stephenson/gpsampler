@@ -8,7 +8,9 @@ from typing import Tuple, Optional
 
 
 rng = np.random.default_rng()
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor 
 
+torch.set_default_tensor_type(T_TYPE)
 
 def k_true(sigma, l, xp, xq): return sigma * \
     np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
@@ -30,9 +32,15 @@ def estimate_rff_kernel(X: np.ndarray, D: int, ks: float, l: float) -> np.ndarra
 
 def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
     kernel = gpytorch.kernels.RBFKernel()
-    kernel.lengthscale = l
     kernel = gpytorch.kernels.ScaleKernel(kernel)
-    kernel.outputscale = b
+    n_gpus = torch.cuda.device_count()
+    if n_gpus > 1:
+        kernel = gpytorch.kernels.MultiDeviceKernel(kernel, device_ids=range(n_gpus), output_device="cuda:0")
+        kernel.base_kernel.base_kernel.lengthscale = l
+        kernel.base_kernel.outputscale = b
+    else:
+        kernel.base_kernel.lengthscale = l
+        kernel.outputscale = b
     return kernel
 
 
@@ -92,7 +100,8 @@ def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
     return np.real(rootK @ rootK)
 
 
-def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, J: int, Q: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, 
+                     lenscale: float, J: int, Q: int, checkpoint_size: int=1500) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP
     using CIQ to approximate K^1/2 b
 
@@ -105,6 +114,9 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
         lenscale (float): RBF lengthscale
         J (int): # Lanczsos iterations
         Q (int): # Quadrature points
+        checkpoint_size (int): Kernel checkpointing size. Larger is faster, but more memory.
+                               0 means no checkpointing and should be used if possible.
+                               Otherwise choose largest value that memory allows.
 
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray]: sampled x values, noise-free
@@ -113,30 +125,22 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     input_dim = xmean.shape[0]
     assert input_dim == xcov_diag.shape[0]
 
-    x = torch.randn(n, dtype=torch.double) * xcov_diag[0]
+    cov_diag = torch.as_tensor(xcov_diag[0].reshape((1, -1)))
+    mean = torch.as_tensor(xmean.reshape((1, -1)))
+    x = torch.randn(n, input_dim) * cov_diag + mean
     u = rng.standard_normal(n)
 
     f_kernel = construct_kernels(lenscale, kernelscale)
-    kernel = f_kernel(x).add_jitter(noise_var)
-    checkpoint_sizes = [int(nn) for nn in np.ceil(
-        n / 2**np.arange(0, np.floor(np.log2(n))))]
-    failure = True
-    for checkpoint_size in checkpoint_sizes:
-        try:
-            with gpytorch.beta_features.checkpoint_kernel(checkpoint_size):
-                solves, weights, _, _ = contour_integral_quad(kernel(x), torch.as_tensor(u.reshape(-1, 1)),
-                                                              max_lanczos_iter=J, num_contour_quadrature=Q)
-                failure = False
-                break
-        except RuntimeError as re:
-            # Assume CUDA OOM is cause
-            torch.cuda.empty_cache()
-            pass
-    if failure:
-        print(checkpoint_size)
-        raise re
-    sample = (solves * weights).sum(0).detach().numpy()
-    return x, sample
+    diag = gpytorch.lazy.DiagLazyTensor(torch.ones(n) * noise_var)
+    kernel = f_kernel(x) + diag
+
+    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size):
+        solves, weights, _, _ = contour_integral_quad(kernel, torch.as_tensor(u.reshape(-1, 1)),
+                                                        max_lanczos_iter=J, num_contour_quadrature=Q)
+    solves = solves.detach().cpu()
+    weights = weights.detach().cpu()
+    sample = (solves * weights).sum(0).numpy()
+    return x.cpu().numpy(), sample
 
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

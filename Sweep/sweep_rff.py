@@ -138,7 +138,7 @@ def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose:
         # record variance as well as mean?
         reject /= NO_TRIALS
         avg_approx_cov /= NO_TRIALS
-        err = np.linalg.norm(theory_cov - avg_approx_cov)
+        err = linalg.norm(theory_cov - avg_approx_cov)
         errors.append(err)
 
         if verbose:

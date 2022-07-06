@@ -12,7 +12,7 @@ CHECKPOINT_SIZE = 1500 # Also found empirically on 16GB GPU. Increase if a bigge
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n", type=int, default=110000)
+    parser.add_argument("--n", type=int, default=1100)
     parser.add_argument("--lengthscale", type=float, default=1.0)
     parser.add_argument("--outputscale", type=float, default=1.0)
     parser.add_argument("--noise_variance", type=float, default=0.1)

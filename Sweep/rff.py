@@ -101,7 +101,7 @@ def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
 
 
 def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, 
-                     lenscale: float, J: int, Q: int, checkpoint_size: int=1500) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                     lenscale: float, J: int, Q: int, checkpoint_size: int=1500, max_preconditioner_size: int = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP
     using CIQ to approximate K^1/2 b
 
@@ -134,7 +134,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     diag = gpytorch.lazy.DiagLazyTensor(torch.ones(n) * noise_var)
     kernel = f_kernel(x) + diag
 
-    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size):
+    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size) as checkpoint_size, gpytorch.settings.max_preconditioner_size(max_preconditioner_size) as max_preconditioner_size:
         solves, weights, _, _ = contour_integral_quad(kernel, torch.as_tensor(u.reshape(-1, 1)),
                                                         max_lanczos_iter=J, num_contour_quadrature=Q)
     solves = solves.detach().cpu()
@@ -237,7 +237,7 @@ def sample_ciq_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, r
 
 
 if __name__ == '__main__':
-    N = 500000  # no. of data points
+    N = 5000  # no. of data points
     d = 2  # input (x) dimensionality
     D = 1000  # no.of fourier features
     J = int(np.sqrt(N) * np.log(N))

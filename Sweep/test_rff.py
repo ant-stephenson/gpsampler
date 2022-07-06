@@ -54,7 +54,7 @@ def construct_kernels(n):
     K2 = ds.sample_with_correlation(n)
 
     K = K1
-    E = (1)**np.random.randint(2)*1e-4 * K2
+    E = (-1)**np.random.randint(2)*1e-2 * K2
     Khat = K + E
     return K, Khat, E
 
@@ -208,3 +208,25 @@ rootKciq = rff.estimate_ciq_kernel(X, J, Q, b, ls)
 sqrt_err_ciq = np.linalg.norm(rootK - rootKciq, ord=2)
 np.linalg.norm(K - rootKciq @ rootKciq)
 # %%
+data = rff.generate_ciq_data(1000, np.ones(3), np.ones(3), 0.1, 0.9, 1.0, 10, 10)
+
+#%%
+#%% - plot J as a function of C and d for theoretical prediction based on
+#preconditioning
+from gpybench.plotting import contourplot
+from gpytools.utils import round_ordermag
+c = np.linspace(1e-3,10,100)
+d = range(1,100)
+fig, ax = plt.subplots(2,2)
+for i,_ax in enumerate(ax.flatten()):
+    n = int(10**(i+5))
+    _ax.set_title(f"{n: 1.0e}")
+    max_level = f(10**(i+5),100,c.min())
+    levels = np.unique(round_ordermag(np.linspace(1,max_level,6)))
+    contourplot(c,d,lambda x,y: f(10**(i+5),y,x), ax=_ax, fig=fig, opt_args={"levels":levels})
+    _ax.set_xscale('log')
+    _ax.set_yscale('log')
+    _ax.set_xlabel("C")
+    _ax.set_ylabel("d")
+plt.suptitle("J")
+# save_fig(Path("."), filename="J_contours_C_d",suffix="png")

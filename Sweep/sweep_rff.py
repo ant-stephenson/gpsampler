@@ -61,6 +61,8 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "ls": np.linspace(min_l, max_l, size_l),  # length scale
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
+                      "Ns": [2**i for i in range(7, 13)],  # no. of data points
+                     }
 param_set_1 = {"ds": [2],  # input (x) dimensionality
                "ls": np.linspace(min_l, max_l, 1),  # length scale
                "sigmas": [1.0],  # kernel scale
@@ -116,26 +118,26 @@ def sweep_fun(
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 
-    errors = []
+    errors=[]
     if verbose:
         print(
             "***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" %
             tup, flush=True)
     for D in _Ds(*tup):
-        avg_approx_cov = theory_cov_noise * 0
-        reject = 0.0
+        avg_approx_cov=theory_cov_noise * 0
+        reject=0.0
         for j in range(NO_TRIALS):
             if benchmark:
-                y_noise = rng.multivariate_normal(0, theory_cov_noise, N)
-                approx_cov = theory_cov_noise
+                y_noise=rng.multivariate_normal(0, theory_cov_noise, N)
+                approx_cov=theory_cov_noise
             else:
-                y_noise, approx_cov = sampling_function(
+                y_noise, approx_cov=sampling_function(
                     x, sigma, noise_var, l, rng, D)
 
-            spherical_y = linalg.solve_triangular(L, y_noise, lower=True)
-            res = stats.cramervonmises(spherical_y, 'norm', args=(0, 1))
-            statistic = res.statistic
-            pvalue = res.pvalue
+            spherical_y=linalg.solve_triangular(L, y_noise, lower=True)
+            res=stats.cramervonmises(spherical_y, 'norm', args=(0, 1))
+            statistic=res.statistic
+            pvalue=res.pvalue
             # pvalue unreliable (see doc) if estimating params
             reject += int(pvalue < significance_threshold)
 
@@ -144,7 +146,7 @@ def sweep_fun(
         # record variance as well as mean?
         reject /= NO_TRIALS
         avg_approx_cov /= NO_TRIALS
-        err = linalg.norm(theory_cov - avg_approx_cov)
+        err=linalg.norm(theory_cov - avg_approx_cov)
         errors.append(err)
 
         if verbose:
@@ -153,7 +155,7 @@ def sweep_fun(
                   err, flush=True)
             print("%.2f%% rejected" % (reject*100), flush=True)
 
-        row_str = str(tup + (D, err, reject))[1:-1]
+        row_str=str(tup + (D, err, reject))[1:-1]
         print(row_str, file=csvfile, flush=True)
 
 
@@ -179,14 +181,14 @@ def run_sweep(
         method (str, optional): "rff" or "ciq". Defaults to "rff".
     """
     if benchmark:
-        filename = f"output_sweep_{method}_{param_index}_{job_id}_bench.csv"
+        filename=f"output_sweep_{method}_{param_index}_{job_id}_bench.csv"
     else:
-        filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
+        filename=f"output_sweep_{method}_{param_index}_{job_id}.csv"
 
-    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
+    filename=check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
 
     with open(filename, 'w', newline='') as csvfile:
-        fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
+        fieldnames=["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
         print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
             Parallel(n_jobs=ncpus, require="sharedmem")(

@@ -242,12 +242,15 @@ def sample_ciq_from_x(
 
     eta = 0.8
 
-    kernel = construct_kernels(l, sigma).add_jitter(0.8 * noise_var)
+    kernel = construct_kernels(
+        l, sigma)(
+        torch.tensor(x)).add_jitter(
+        0.8 * noise_var)
     with gpytorch.beta_features.checkpoint_kernel(checkpoint_size) as checkpoint_size, gpytorch.settings.max_preconditioner_size(max_preconditioner_size) as max_preconditioner_size:
         # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
         solves, weights, _, _ = contour_integral_quad(
-            kernel(torch.tensor(x)),
-            torch.tensor(u.reshape(-1, 1)),
+            kernel,
+            torch.as_tensor(u.reshape(-1, 1)),
             max_lanczos_iter=J, num_contour_quadrature=Q)
     f = (solves * weights).sum(0).squeeze()
     y_noise = (f + torch.sqrt(torch.tensor((1-eta)*noise_var))

@@ -1,11 +1,14 @@
 from itertools import product
 from functools import partial
 import numpy as np
-from typing import Tuple, TextIO
+import torch
+from typing import Tuple, TextIO, Iterable
 from scipy import linalg, stats
 from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
+from gpytorch.lazy import LazyTensor
 from gpybench.utils import check_exists
+from gpybench.datasets import construct_kernel
 import pathlib
 
 import rff
@@ -61,12 +64,15 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "ls": np.linspace(min_l, max_l, size_l),  # length scale
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
+                     "Ns": [2**i for i in range(4, 10)],  # no. of data points
+                     }
+
 param_set_1 = {"ds": [2],  # input (x) dimensionality
                "ls": np.linspace(min_l, max_l, 1),  # length scale
                "sigmas": [1.0],  # kernel scale
                "noise_vars": [1e-3],  # noise_variance
                "Ns": [int(100e3)],  # no. of data points
-                     }
+               }
 
 
 def generate_param_list(d, l, sigma, noise_var, Ns): return [
@@ -106,6 +112,15 @@ def sweep_fun(
     d, l, sigma, noise_var, N = tup
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
+    print("x-data generated", flush=True)
+    theory_cov_noise = construct_kernel(sigma, l)(
+        torch.tensor(x)).add_jitter(noise_var)
+    # theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
+    # theory_cov_noise = theory_cov + noise_var*np.eye(N)
+    # L = linalg.cholesky(theory_cov_noise, lower=True)
+    print("Kernel constructed", flush=True)
+    L = theory_cov_noise.cholesky()
+    print("Cholesky decomposition completed", flush=True)
 
     if method == "rff":
         _Ds = Ds
@@ -113,6 +128,8 @@ def sweep_fun(
     elif method == "ciq":
         _Ds = Js
         sampling_function = partial(
+            rff.sample_ciq_from_x,
+            max_preconditioner_size=0)  # int(np.sqrt(x.shape[0])))
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 
@@ -132,19 +149,29 @@ def sweep_fun(
                 y_noise, approx_cov = sampling_function(
                     x, sigma, noise_var, l, rng, D)
 
-            spherical_y = linalg.solve_triangular(L, y_noise, lower=True)
-            res = stats.cramervonmises(spherical_y, 'norm', args=(0, 1))
+            print("data generated", flush=True)
+            # spherical_y = linalg.solve_triangular(L, y_noise, lower=True)
+            spherical_y = (L.inv_matmul(torch.tensor(
+                y_noise).reshape(-1, 1))).detach().numpy()
+            res = stats.cramervonmises(
+                spherical_y.flatten(),
+                'norm', args=(0, 1))
             statistic = res.statistic
             pvalue = res.pvalue
             # pvalue unreliable (see doc) if estimating params
             reject += int(pvalue < significance_threshold)
 
+            if np.isnan(approx_cov):
+                approx_cov = approx_cov * avg_approx_cov
             avg_approx_cov += approx_cov
 
         # record variance as well as mean?
         reject /= NO_TRIALS
         avg_approx_cov /= NO_TRIALS
-        err = linalg.norm(theory_cov - avg_approx_cov)
+        if isinstance(theory_cov_noise, LazyTensor) or np.isnan(avg_approx_cov).any() or np.isnan(theory_cov_noise):
+            err = np.nan
+        else:
+            err = linalg.norm(theory_cov_noise - avg_approx_cov)
         errors.append(err)
 
         if verbose:

@@ -62,6 +62,12 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
                       "Ns": [2**i for i in range(7, 13)],  # no. of data points
+param_set_1 = {"ds": [2],  # input (x) dimensionality
+               "ls": np.linspace(min_l, max_l, 1),  # length scale
+               "sigmas": [1.0],  # kernel scale
+               "noise_vars": [1e-3],  # noise_variance
+               "Ns": [int(100e3)],  # no. of data points
+               }
                      }
 param_set_1 = {"ds": [2],  # input (x) dimensionality
                "ls": np.linspace(min_l, max_l, 1),  # length scale
@@ -71,10 +77,12 @@ param_set_1 = {"ds": [2],  # input (x) dimensionality
                      }
 
 
-def generate_param_list(d, l, sigma, noise_var, Ns): return [
+param_sets = {0: default_param_set.values(), 1: param_set_1.values(), 2: []}
     [d], [l], [sigma], [noise_var], Ns]
 
-# def generate_param_set(NO_RUNS):
+def sweep_fun(
+        tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool,
+        benchmark: bool, significance_threshold: float) -> None:
 #     for _ in NO_RUNS:
 #         d = get_d()
 #         l = get_l()

@@ -1,4 +1,5 @@
 from itertools import product
+from functools import partial
 import numpy as np
 from typing import Tuple, TextIO
 from scipy import linalg, stats
@@ -60,7 +61,11 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "ls": np.linspace(min_l, max_l, size_l),  # length scale
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(7, 13)],  # no. of data points
+param_set_1 = {"ds": [2],  # input (x) dimensionality
+               "ls": np.linspace(min_l, max_l, 1),  # length scale
+               "sigmas": [1.0],  # kernel scale
+               "noise_vars": [1e-3],  # noise_variance
+               "Ns": [int(100e3)],  # no. of data points
                      }
 
 
@@ -77,10 +82,12 @@ def generate_param_list(d, l, sigma, noise_var, Ns): return [
 #         yield generate_param_list(d, l, sigma, noise_var, Ns)
 
 
-param_sets = {0: default_param_set.values(), 1: [], 2: []}
+param_sets = {0: default_param_set.values(), 1: param_set_1.values(), 2: []}
 
 
-def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool, benchmark: bool, significance_threshold: float) -> None:
+def sweep_fun(
+        tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool,
+        benchmark: bool, significance_threshold: float) -> None:
     """ Run experiment over a tuple of parameters NO_TRIALS times, writing to a
     csvfile. Supports RFF and CIQ methods.
 
@@ -98,29 +105,28 @@ def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose:
     """
     d, l, sigma, noise_var, N = tup
 
-    x = rng.standard_normal(size=(N, d))
-    theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
-    theory_cov_noise = theory_cov + noise_var*np.eye(N)
-    L = linalg.cholesky(theory_cov_noise, lower=True)
+    x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
 
     if method == "rff":
         _Ds = Ds
         sampling_function = rff.sample_rff_from_x
     elif method == "ciq":
         _Ds = Js
-        sampling_function = rff.sample_ciq_from_x
+        sampling_function = partial(
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 
     errors = []
     if verbose:
-        print("***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" % tup)
+        print(
+            "***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" %
+            tup, flush=True)
     for D in _Ds(*tup):
-        avg_approx_cov = np.zeros_like(theory_cov)
+        avg_approx_cov = theory_cov_noise * 0
         reject = 0.0
         for j in range(NO_TRIALS):
             if benchmark:
-                y_noise = rng.multivariate_normal(0, theory_cov, N)
+                y_noise = rng.multivariate_normal(0, theory_cov_noise, N)
                 approx_cov = theory_cov_noise
             else:
                 y_noise, approx_cov = sampling_function(
@@ -142,15 +148,19 @@ def sweep_fun(tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose:
         errors.append(err)
 
         if verbose:
-            print("D = %d" % D)
-            print("Norm difference between average approximate and exact K: %.6f" % err)
-            print("%.2f%% rejected" % (reject*100))
+            print("D = %d" % D, flush=True)
+            print("Norm difference between average approximate and exact K: %.6f" %
+                  err, flush=True)
+            print("%.2f%% rejected" % (reject*100), flush=True)
 
         row_str = str(tup + (D, err, reject))[1:-1]
         print(row_str, file=csvfile, flush=True)
 
 
-def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2, method="rff") -> None:
+def run_sweep(
+        ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1,
+        significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2,
+        method="rff", job_id=0) -> None:
     """ Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
 
@@ -169,9 +179,9 @@ def run_sweep(ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1, signifi
         method (str, optional): "rff" or "ciq". Defaults to "rff".
     """
     if benchmark:
-        filename = f"output_sweep_{method}_{param_index}_bench.csv"
+        filename = f"output_sweep_{method}_{param_index}_{job_id}_bench.csv"
     else:
-        filename = f"output_sweep_{method}_{param_index}.csv"
+        filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
 
     filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
 

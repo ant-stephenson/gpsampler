@@ -8,9 +8,10 @@ from typing import Tuple, Optional
 
 
 rng = np.random.default_rng()
-T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor 
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor
 
 torch.set_default_tensor_type(T_TYPE)
+
 
 def k_true(sigma, l, xp, xq): return sigma * \
     np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
@@ -21,7 +22,8 @@ def z(omega, D, x): return np.sqrt(2/D)*np.ravel(np.column_stack(
 def f(omega, D, w, x): return np.sum(w*z(omega, D, x))  # GP approximation
 
 
-def estimate_rff_kernel(X: np.ndarray, D: int, ks: float, l: float) -> np.ndarray:
+def estimate_rff_kernel(
+        X: np.ndarray, D: int, ks: float, l: float) -> np.ndarray:
     N, d = X.shape
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
@@ -35,7 +37,8 @@ def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
     kernel = gpytorch.kernels.ScaleKernel(kernel)
     n_gpus = torch.cuda.device_count()
     if n_gpus > 1:
-        kernel = gpytorch.kernels.MultiDeviceKernel(kernel, device_ids=range(n_gpus), output_device="cuda:0")
+        kernel = gpytorch.kernels.MultiDeviceKernel(
+            kernel, device_ids=range(n_gpus), output_device="cuda:0")
         kernel.base_kernel.base_kernel.lengthscale = l
         kernel.base_kernel.outputscale = b
     else:
@@ -100,8 +103,11 @@ def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
     return np.real(rootK @ rootK)
 
 
-def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, 
-                     lenscale: float, J: int, Q: int, checkpoint_size: int=1500, max_preconditioner_size: int = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
+                      noise_var: float, kernelscale: float, lenscale: float,
+                      J: int, Q: int, checkpoint_size: int = 1500,
+                      max_preconditioner_size: int = 0) -> Tuple[np.ndarray, np.
+                                                                 ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP
     using CIQ to approximate K^1/2 b
 
@@ -135,15 +141,18 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     kernel = f_kernel(x) + diag
 
     with gpytorch.beta_features.checkpoint_kernel(checkpoint_size) as checkpoint_size, gpytorch.settings.max_preconditioner_size(max_preconditioner_size) as max_preconditioner_size:
-        solves, weights, _, _ = contour_integral_quad(kernel, torch.as_tensor(u.reshape(-1, 1)),
-                                                        max_lanczos_iter=J, num_contour_quadrature=Q)
+        solves, weights, _, _ = contour_integral_quad(
+            kernel, torch.as_tensor(u.reshape(-1, 1)),
+            max_lanczos_iter=J, num_contour_quadrature=Q)
     solves = solves.detach().cpu()
     weights = weights.detach().cpu()
     sample = (solves * weights).sum(0).numpy()
     return x.cpu().numpy(), sample
 
 
-def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_var: float, kernelscale: float, lenscale: float, D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
+                      noise_var: float, kernelscale: float, lenscale: float,
+                      D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP using RFF
 
     Args:
@@ -178,7 +187,9 @@ def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray, noise_va
     return x, sample, noisy_sample
 
 
-def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, rng: np.random.Generator, D: int) -> Tuple[np.ndarray, np.ndarray]:
+def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
+                      rng: np.random.Generator, D: int) -> Tuple[np.ndarray, np.
+                                                                 ndarray]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:
@@ -208,7 +219,11 @@ def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, r
     return y_noise, approx_cov
 
 
-def sample_ciq_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, rng: np.random.Generator, J: int, Q: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+def sample_ciq_from_x(
+        x: np.ndarray, sigma: float, noise_var: float, l: float,
+        rng: np.random.Generator, J: int, Q: Optional[int] = None,
+        checkpoint_size: int = 1500, max_preconditioner_size: int = 0) -> Tuple[
+        np.ndarray, np.ndarray]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:
@@ -225,11 +240,17 @@ def sample_ciq_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float, r
     n, d = x.shape
     u = rng.standard_normal(n)
 
-    kernel = construct_kernels(l, sigma)
-    solves, weights, _, _ = contour_integral_quad(kernel(torch.tensor(x)), torch.tensor(
-        u.reshape(-1, 1)), max_lanczos_iter=J, num_contour_quadrature=Q)
+    eta = 0.8
+
+    kernel = construct_kernels(l, sigma).add_jitter(0.8 * noise_var)
+    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size) as checkpoint_size, gpytorch.settings.max_preconditioner_size(max_preconditioner_size) as max_preconditioner_size:
+        # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
+        solves, weights, _, _ = contour_integral_quad(
+            kernel(torch.tensor(x)),
+            torch.tensor(u.reshape(-1, 1)),
+            max_lanczos_iter=J, num_contour_quadrature=Q)
     f = (solves * weights).sum(0).squeeze()
-    y_noise = (f + torch.sqrt(torch.tensor(noise_var))
+    y_noise = (f + torch.sqrt(torch.tensor((1-eta)*noise_var))
                * torch.randn(n)).detach().numpy()
     # approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
     approx_cov = np.nan
@@ -268,7 +289,7 @@ lenscale %.2f
         )
     )
 
-    x, sample, noisy_sample = generate_ciq_data(
+    x, sample = generate_ciq_data(
         N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)

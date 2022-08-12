@@ -54,11 +54,12 @@ def Js(d, l, sigma, noise_var, N):
     return _Js
 
 
-min_l = 1e-3
-max_l = 2.0
-size_l = 2
+min_l = 1e-2
+max_l = 1.0
+
 default_param_set = {"ds": [2],  # input (x) dimensionality
-                     "ls": np.linspace(min_l, max_l, size_l),  # length scale
+                     # np.linspace(min_l, max_l, size_l),  # length scale
+                     "ls": [1e-1, 0.5, 1, 2],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
                      "Ns": [2**i for i in range(7, 13)],  # no. of data points
@@ -93,6 +94,7 @@ def sweep_fun(
         ValueError: If method other than "rff" or "ciq" used
     """
     d, l, sigma, noise_var, N = tup
+    max_preconditioner_size = int(np.sqrt(N))
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
     theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
@@ -105,15 +107,17 @@ def sweep_fun(
     elif method == "ciq":
         _Ds = Js
         sampling_function = partial(
-            rff.sample_ciq_from_x, max_preconditioner_size=0)
+            rff.sample_ciq_from_x,
+            max_preconditioner_size=max_preconditioner_size)
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 
     errors = []
     if verbose:
         print(
-            "***d = %d, l = %.2f, sigma = %.2f, noise_var = %.2f, N = %d***" %
+            "***d = %d, l = %.2e, sigma = %.2e, noise_var = %.2e, N = %d***" %
             tup, flush=True)
+        print(f"max_preconditioner_size={max_preconditioner_size}", flush=True)
     for D in _Ds(*tup):
         avg_approx_cov = theory_cov_noise * 0
         reject = 0.0
@@ -132,12 +136,17 @@ def sweep_fun(
             # pvalue unreliable (see doc) if estimating params
             reject += int(pvalue < significance_threshold)
 
+            if np.isnan(approx_cov):
+                approx_cov = approx_cov * avg_approx_cov
             avg_approx_cov += approx_cov
 
         # record variance as well as mean?
         reject /= NO_TRIALS
         avg_approx_cov /= NO_TRIALS
-        err = linalg.norm(theory_cov - avg_approx_cov)
+        if np.isnan(avg_approx_cov).any() or np.isnan(theory_cov_noise):
+            err = np.nan
+        else:
+            err = linalg.norm(theory_cov_noise - avg_approx_cov)
         errors.append(err)
 
         if verbose:

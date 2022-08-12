@@ -7,8 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
 #SBATCH --time=200:00:00
-##SBATCH --mem=50G
-#SBATCH --mem-per-cpu=15G
+#SBATCH --mem-per-cpu=50G
 #SBATCH --array=0
 
 SCRIPT_DIR=/user/work/ll20823/mini-project

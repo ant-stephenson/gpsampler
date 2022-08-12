@@ -8,7 +8,7 @@ from joblib import Parallel, delayed
 from gpybench.utils import check_exists
 import pathlib
 
-import rff
+import sampling
 
 rng = np.random.default_rng()
 
@@ -103,11 +103,11 @@ def sweep_fun(
 
     if method == "rff":
         _Ds = Ds
-        sampling_function = rff.sample_rff_from_x
+        sampling_function = sampling.sample_rff_from_x
     elif method == "ciq":
         _Ds = Js
         sampling_function = partial(
-            rff.sample_ciq_from_x,
+            sampling.sample_ciq_from_x,
             max_preconditioner_size=max_preconditioner_size)
     else:
         raise ValueError("Options supported are `rff` or `ciq`")

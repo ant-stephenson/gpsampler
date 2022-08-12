@@ -8,7 +8,7 @@ from typing import Tuple, Optional
 from contextlib import ExitStack
 
 rng = np.random.default_rng()
-T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor # type: ignore
 
 torch.set_default_tensor_type(T_TYPE)
 
@@ -98,7 +98,10 @@ def estimate_ciq_kernel(X: np.ndarray, J: int, Q: int, ks: float, l: float, nv: 
     J = int(np.sqrt(n) * np.log(n))
     Q = int(np.log(n))
     K = kernel(torch.tensor(X)).detach().numpy()
-    rootK = matsqrt(K, J, Q, nv)
+    if nv is not None:
+        rootK = matsqrt(K, J, Q, nv)
+    else:
+        rootK = matsqrt(K, J, Q)
     return np.real(rootK @ rootK)
 
 
@@ -143,7 +146,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
                       noise_var: float, kernelscale: float, lenscale: float,
-                      D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      D: int) -> Tuple[np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP using RFF
 
     Args:

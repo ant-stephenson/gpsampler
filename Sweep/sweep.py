@@ -185,7 +185,7 @@ def run_sweep(
     else:
         filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
 
-    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
+    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0] # type: ignore
 
     with open(filename, 'w', newline='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
@@ -203,4 +203,4 @@ def run_sweep(
 
 
 if __name__ == "__main__":
-    run_sweep(**default_param_set, method="ciq")
+    run_sweep(**default_param_set, method="ciq") # type: ignore

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import re
 import inspect
-
+ 
 #%%
 if isnotebook():
     path = Path(".")
@@ -18,8 +18,20 @@ else:
     path = Path(".")
 #%%
 method = "ciq"
-sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_1.csv"))
+job_id = 2489639#2504261#2479515
+sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_0_{job_id}.csv"))
 sweep = sweep.sort_values(by=["N","D","l"])
+
+#%% compute approximate confidence interval on the rejection rate, by using the
+#following argument:
+# E[r] = q, rhat ~ q; var(rhat) = q(1-q)/N; var(rhat)_hat ~ rhat(1-rhat)/N
+# q = 1/2*(alpha + (1-beta)), rhat = 1/2(alpha + (1-betahat))
+# betahat = 1 - 2rhat + alpha
+# varrhat = rhat(betahat-alpha)/N = rhat(1-2rhat)/N
+# assume N = 1000 (check file)
+sweep.loc[:, "rsigma"] = 2 * np.sqrt(sweep.reject * (1-2*sweep.reject) / 1000)
+
+#%% group by parameter values
 sweep_grp = sweep.groupby(["d", "l", "sigma", "noise_var"])
 
 grp = list(sweep_grp.groups.keys())[0]
@@ -29,10 +41,15 @@ ax1 = sns.lineplot(x="D", y="err", data=sweep, hue="N")
 ax1.set(xscale="log", yscale="log")
 ax1.set_title(title)
 # save_fig(path, f"logerr-logD_byN_{method}", suffix="jpg", show=True)
-#%% empirically estimate the convergence of r wrt D? e.g. D ~ nlogn or n^2 or ... i.e. find the first D for each N s.t. the observed rejection rate is within some small distance (1e-2 for now; arbitrary need fluctuation analysis) of the significance level, taking the average over lengthscales:
+
+#%% empirically estimate the convergence of r wrt D? e.g. D ~ nlogn or n^2 or
+#... i.e. find the first D for each N s.t. the observed rejection rate is within
+#some small distance (1e-2 for now; arbitrary need fluctuation analysis) of the
+#significance level, taking the average over lengthscales:
 crossing_Ds = dict()
 for idx, grp_df in sweep.groupby(["N"]):
     avg_r_by_D = grp_df.groupby("D").reject.mean()
+    ci_by_D = grp_df.groupby("D").rsigma.mean()
     crossing_Ds[idx] = (np.abs(avg_r_by_D - 0.1) > 1e-2).idxmin()
 #%% - plot rejection rate as function of no. RFF (logscales)
 
@@ -49,17 +66,26 @@ def plot_reject_by_D(df: pd.DataFrame):
     ax2.vlines(crossing_Ds.values(), ymin=0, ymax=maxy, colors=palette, ls="dotted")
     sig_thresh = 0.1
     ax2.axhline(sig_thresh, ls='--')
+    
+    # grp_D = df.groupby("D")
+    # upper = grp_D.reject.max() + grp_D.rsigma.mean()
+    # lower = df.groupby("D").reject.min() - df.groupby("D").rsigma.mean()
+    # ax2.plot(df.D.unique(), upper, ls='--', color="green")
+    # ax2.plot(df.D.unique(), lower, ls='--', color="green")
     ax2.axhline(sig_thresh + 1e-2, ls='--', color="green")
     ax2.axhline(sig_thresh - 1e-2, ls='--', color="green")
 
-    # eps = eps = np.exp(-sweep.noise_var/np.sqrt(sweep.N) * (sweep.D-1) - np.log(sweep.N)-5)
+    # eps = np.exp(-np.sqrt(sweep.noise_var)/np.sqrt(sweep.N) * (sweep.D-1) +
+    # np.log(sweep.N)+5)
+    eps = np.log10(sweep.N)*np.log10(25*sweep.N/sweep.noise_var)*sweep.N/np.sqrt(sweep.noise_var)/np.pi * ((np.sqrt(sweep.N/sweep.noise_var) - 1) / (np.sqrt(sweep.N/sweep.noise_var) + 1)) ** (sweep.D-1)
     # ax2.plot(sweep.D, eps+0.1)
 
     str_f = re.findall(r"(?<=\:).*", inspect.getsource(order_f))[0]
     ax2.set_title(str_f)
-    # save_fig(path, f"logreject-logD_byN_{method}", suffix="jpg", show=True, size_inches=(12,8))
+    # save_fig(path, f"logreject-logD_byN_{method}_{job_id}", suffix="jpg", show=True, size_inches=(12,8))
 
 sweep_sub = sweep_grp.get_group(grp)
+# plot_reject_by_D(sweep.loc[sweep.l == 2.0, :])
 plot_reject_by_D(sweep)
 # %%- plot err vs reject (for particular value of l for now)
 ax3 = sns.lineplot(x="err", y="reject", hue="N", marker="D", data=sweep_sub)

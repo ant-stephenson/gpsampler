@@ -134,23 +134,11 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     cov_diag = torch.as_tensor(xcov_diag[0].reshape((1, -1)))
     mean = torch.as_tensor(xmean.reshape((1, -1)))
     x = torch.randn(n, input_dim) * cov_diag + mean
-    u = rng.standard_normal(n)
 
-    f_kernel = construct_kernels(lenscale, kernelscale)
-    diag = gpytorch.lazy.DiagLazyTensor(torch.ones(n) * noise_var)
-    kernel = f_kernel(x) + diag
+    sample, approx_cov = sample_ciq_from_x(
+        x, kernelscale, noise_var, lenscale, rng, J, Q,
+        checkpoint_size, max_preconditioner_size)
 
-    with ExitStack() as stack:
-        checkpoint_size = stack.enter_context(
-            gpytorch.beta_features.checkpoint_kernel(checkpoint_size))
-        max_preconditioner_size = stack.enter_context(
-            gpytorch.settings.max_preconditioner_size(max_preconditioner_size))
-        solves, weights, _, _ = contour_integral_quad(
-            kernel, torch.as_tensor(u.reshape(-1, 1)),
-            max_lanczos_iter=J, num_contour_quadrature=Q)
-    solves = solves.detach().cpu()
-    weights = weights.detach().cpu()
-    sample = (solves * weights).sum(0).numpy()
     return x.cpu().numpy(), sample
 
 
@@ -179,16 +167,9 @@ def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     xcov = np.diag(xcov_diag)
     x = rng.multivariate_normal(xmean, xcov, n)
 
-    # covariance matrix for fourier transform of kernel
-    cov_omega = np.eye(input_dim)/lenscale**2
-    # sample from kernel spectral density
-    omega = rng.multivariate_normal(np.zeros(input_dim), cov_omega, D//2)
-    w = rng.standard_normal(D)  # sample weights
-
-    my_f = partial(f, omega, D, w)  # GP approx as function of only x
-    sample = np.array([my_f(xx) for xx in x])*np.sqrt(kernelscale)
-    noisy_sample = sample + rng.normal(0.0, np.sqrt(noise_var), n)
-    return x, sample, noisy_sample
+    noisy_sample, approx_cov = sample_rff_from_x(
+        x, kernelscale, noise_var, lenscale, rng, D)
+    return x, noisy_sample
 
 
 def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
@@ -272,9 +253,9 @@ def sample_ciq_from_x(
 
 
 if __name__ == '__main__':
-    N = 5000  # no. of data points
+    N = 500  # no. of data points
     d = 2  # input (x) dimensionality
-    D = 1000  # no.of fourier features
+    D = 100  # no.of fourier features
     J = int(np.sqrt(N) * np.log(N))
     Q = int(np.log(N))
     l = 1.1  # lengthscale
@@ -303,8 +284,9 @@ lenscale %.2f
         )
     )
 
-    x, sample = generate_ciq_data(
-        N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
+    # x, sample = generate_ciq_data(
+    #     N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
+    x, sample = generate_rff_data(N, xmean, xcov_diag, noise_var, sigma, l, D)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)
     # np.savetxt("noisy_sample.out.gz", noisy_sample)

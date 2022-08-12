@@ -5,7 +5,7 @@ import torch
 import gpytorch
 from gpytorch.utils import contour_integral_quad
 from typing import Tuple, Optional
-
+from contextlib import ExitStack
 
 rng = np.random.default_rng()
 T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor
@@ -140,7 +140,11 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     diag = gpytorch.lazy.DiagLazyTensor(torch.ones(n) * noise_var)
     kernel = f_kernel(x) + diag
 
-    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size) as checkpoint_size, gpytorch.settings.max_preconditioner_size(max_preconditioner_size) as max_preconditioner_size:
+    with ExitStack() as stack:
+        checkpoint_size = stack.enter_context(
+            gpytorch.beta_features.checkpoint_kernel(checkpoint_size))
+        max_preconditioner_size = stack.enter_context(
+            gpytorch.settings.max_preconditioner_size(max_preconditioner_size))
         solves, weights, _, _ = contour_integral_quad(
             kernel, torch.as_tensor(u.reshape(-1, 1)),
             max_lanczos_iter=J, num_contour_quadrature=Q)
@@ -246,7 +250,14 @@ def sample_ciq_from_x(
         l, sigma)(
         torch.tensor(x)).add_jitter(
         0.8 * noise_var)
-    with gpytorch.beta_features.checkpoint_kernel(checkpoint_size) as checkpoint_size, gpytorch.settings.max_preconditioner_size(max_preconditioner_size) as max_preconditioner_size:
+
+    with ExitStack() as stack:
+        checkpoint_size = stack.enter_context(
+            gpytorch.beta_features.checkpoint_kernel(checkpoint_size))
+        max_preconditioner_size = stack.enter_context(
+            gpytorch.settings.max_preconditioner_size(max_preconditioner_size))
+        min_preconditioning_size = stack.enter_context(
+            gpytorch.settings.min_preconditioning_size(100))
         # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
         solves, weights, _, _ = contour_integral_quad(
             kernel,

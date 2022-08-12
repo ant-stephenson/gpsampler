@@ -1,5 +1,5 @@
 import argparse
-import sweep_rff
+import sweep
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -16,10 +16,10 @@ if __name__ == "__main__":
     param_set = {
         k: v
         for(k, v) in zip(
-            sweep_rff.default_param_set.keys(),
-            sweep_rff.param_sets[args.param_idx])}
+            sweep.default_param_set.keys(),
+            sweep.param_sets[args.param_idx])}
 
-    sweep_rff.run_sweep(
+    sweep.run_sweep(
         **param_set,
         job_id=args.job_id,
         verbose=args.verbose,

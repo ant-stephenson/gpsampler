@@ -1,7 +1,7 @@
 from itertools import product
 from functools import partial
 import numpy as np
-from typing import Tuple, TextIO
+from typing import Tuple, TextIO, List, Iterable
 from scipy import linalg, stats
 from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
@@ -15,39 +15,39 @@ rng = np.random.default_rng()
 # no. of fourier features, can depend on other params
 
 
-def Ds(d, l, sigma, noise_var, N):
+def Ds(d: int, l: float, sigma: float, noise_var: float, N: int) -> List[int]:
     """ creates array of #rff to use for different experiments, based on the
     input size N. Maxes out at N^2
 
     Args:
-        d (_type_): _description_
-        l (_type_): _description_
-        sigma (_type_): _description_
-        noise_var (_type_): _description_
-        N (_type_): _description_
+        d (int): _description_
+        l (float): _description_
+        sigma (float): _description_
+        noise_var (float): _description_
+        N (int): _description_
 
     Returns:
-        _type_: _description_
+        List[int]: _description_
     """
     max_D = int(np.log2(N**2))
     _Ds = [2**i for i in range(max_D)]
     return _Ds
 
 
-def Js(d, l, sigma, noise_var, N):
+def Js(d: int, l: float, sigma: float, noise_var: float, N: int) -> List[int]:
     """ creates array of #lanczsos iter to use for different experiments based
     on the input size N. Maxes out at N.
 
     Args:
-        d (_type_): _description_
-        l (_type_): _description_
-        sigma (_type_): _description_
-        noise_var (_type_): _description_
-        N (_type_): _description_
+        d (int): _description_
+        l (float): _description_
+        sigma (float): _description_
+        noise_var (float): _description_
+        N (int): _description_
 
     Returns:
-        _type_: _description_
-    """
+        List[int]: _description_
+    """    
     # leave Q as default for now
     max_J = int(np.log2(N))
     _Js = [2**i for i in range(max_J)]
@@ -160,9 +160,9 @@ def sweep_fun(
 
 
 def run_sweep(
-        ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1,
-        significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2,
-        method="rff", job_id=0) -> None:
+        ds: Iterable, ls: Iterable, sigmas: Iterable, noise_vars: Iterable, Ns: Iterable, verbose: bool=True, NO_TRIALS: int=1,
+        significance_threshold: float=0.1, param_index: int=0, benchmark: bool=False, ncpus: int=2,
+        method: str="rff", job_id: int=0) -> None:
     """ Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
 

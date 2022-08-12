@@ -47,17 +47,16 @@ def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
     return kernel
 
 
-def approx_extreme_eigs(X, noise_var=None):
+def approx_extreme_eigs(X: np.ndarray, noise_var: Optional[float] =None):
     max_eig = X.shape[0]
     if noise_var is not None:
         min_eig = noise_var
     else:
         min_eig = 1/max_eig
     return min_eig, max_eig
-    raise NotImplementedError
 
 
-def matsqrt(X, J, Q, reg=1e-6):
+def matsqrt(X: np.ndarray, J: int, Q: int, reg: float=1e-6):
     """Calculates the matrix sqrt of a symmetric matrix X using method 3 in
     Hale2008. Note that this implementation is not computationally efficient as
     it directly inverts an nxn matrix. 
@@ -93,7 +92,7 @@ def matsqrt(X, J, Q, reg=1e-6):
     return S
 
 
-def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
+def estimate_ciq_kernel(X: np.ndarray, J: int, Q: int, ks: float, l: float, nv: Optional[float]=None) -> np.ndarray:
     kernel = construct_kernels(l, ks)
     n, d = X.shape
     J = int(np.sqrt(n) * np.log(n))

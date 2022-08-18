@@ -29,7 +29,7 @@ def Ds(d, l, sigma, noise_var, N):
     Returns:
         _type_: _description_
     """
-    max_D = int(np.log2(N**2))
+    max_D = int(np.log2(N**2)) + 1
     _Ds = [2**i for i in range(max_D)]
     return _Ds
 
@@ -49,8 +49,8 @@ def Js(d, l, sigma, noise_var, N):
         _type_: _description_
     """
     # leave Q as default for now
-    max_J = int(np.log2(N))
-    _Js = [2**i for i in range(max_J)]
+    max_J = int(np.log2(N)) + 1
+    _Js = [2**i for i in range(4, max_J)]
     return _Js
 
 
@@ -62,7 +62,7 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "ls": [1e-1, 0.5, 1, 2],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(7, 13)],  # no. of data points
+                     "Ns": [2**i for i in range(8, 14)],  # no. of data points
                      }
 param_set_1 = {"ds": [2],  # input (x) dimensionality
                "ls": np.linspace(min_l, max_l, 1),  # length scale
@@ -94,7 +94,7 @@ def sweep_fun(
         ValueError: If method other than "rff" or "ciq" used
     """
     d, l, sigma, noise_var, N = tup
-    max_preconditioner_size = int(np.sqrt(N))
+    max_preconditioner_size = 0  # int(np.sqrt(N))
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
     theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))

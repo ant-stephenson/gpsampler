@@ -230,7 +230,7 @@ def sample_ciq_from_x(
     kernel = construct_kernels(
         l, sigma)(
         torch.tensor(x)).add_jitter(
-        0.8 * noise_var)
+        eta * noise_var)
 
     with ExitStack() as stack:
         checkpoint_size = stack.enter_context(

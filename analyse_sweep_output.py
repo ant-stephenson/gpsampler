@@ -13,12 +13,12 @@ import inspect
  
 #%%
 if isnotebook():
-    path = Path(".")
+    path = Path("..")
 else:
     path = Path(".")
 #%%
 method = "ciq"
-job_id = 2489639#2504261#2479515
+job_id = 2513990#2504261#2479515
 sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_0_{job_id}.csv"))
 sweep = sweep.sort_values(by=["N","D","l"])
 
@@ -52,6 +52,8 @@ for idx, grp_df in sweep.groupby(["N"]):
     ci_by_D = grp_df.groupby("D").rsigma.mean()
     crossing_Ds[idx] = (np.abs(avg_r_by_D - 0.1) > 1e-2).idxmin()
 #%% - plot rejection rate as function of no. RFF (logscales)
+import matplotlib.pyplot as plt
+
 
 def plot_reject_by_D(df: pd.DataFrame):
     palette = sns.color_palette(palette="flare", n_colors=df.N.nunique())
@@ -77,7 +79,7 @@ def plot_reject_by_D(df: pd.DataFrame):
 
     # eps = np.exp(-np.sqrt(sweep.noise_var)/np.sqrt(sweep.N) * (sweep.D-1) +
     # np.log(sweep.N)+5)
-    eps = np.log10(sweep.N)*np.log10(25*sweep.N/sweep.noise_var)*sweep.N/np.sqrt(sweep.noise_var)/np.pi * ((np.sqrt(sweep.N/sweep.noise_var) - 1) / (np.sqrt(sweep.N/sweep.noise_var) + 1)) ** (sweep.D-1)
+    # eps = np.log10(sweep.N)*np.log10(25*sweep.N/sweep.noise_var)*sweep.N/np.sqrt(sweep.noise_var)/np.pi * ((np.sqrt(sweep.N/sweep.noise_var) - 1) / (np.sqrt(sweep.N/sweep.noise_var) + 1)) ** (sweep.D-1)
     # ax2.plot(sweep.D, eps+0.1)
 
     str_f = re.findall(r"(?<=\:).*", inspect.getsource(order_f))[0]
@@ -85,7 +87,15 @@ def plot_reject_by_D(df: pd.DataFrame):
     # save_fig(path, f"logreject-logD_byN_{method}_{job_id}", suffix="jpg", show=True, size_inches=(12,8))
 
 sweep_sub = sweep_grp.get_group(grp)
-# plot_reject_by_D(sweep.loc[sweep.l == 2.0, :])
+# sns.relplot(
+#     data=sweep,
+#     x="D", y="reject",
+#     hue="N", col="l",
+#     kind="line", palette=palette,
+#     height=5, aspect=.75, facet_kws=dict(sharex=False),
+# )
+
+plot_reject_by_D(sweep.loc[sweep.l == 2.0, :])
 plot_reject_by_D(sweep)
 # %%- plot err vs reject (for particular value of l for now)
 ax3 = sns.lineplot(x="err", y="reject", hue="N", marker="D", data=sweep_sub)

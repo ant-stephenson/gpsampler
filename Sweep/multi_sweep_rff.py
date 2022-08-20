@@ -10,6 +10,8 @@ if __name__ == "__main__":
     parser.add_argument("--significance_threshold", default=0.1, type=float)
     parser.add_argument("--ncpus", default=1, type=int)
     parser.add_argument("--method", default="rff", type=str)
+    # run ciq with preconditioning
+    parser.add_argument("--pre", default=True, type=bool)
 
     args = parser.parse_args()
 
@@ -28,4 +30,5 @@ if __name__ == "__main__":
         significance_threshold=args.significance_threshold,
         ncpus=args.ncpus,
         method=args.method,
+        with_pre=args.pre,
     )

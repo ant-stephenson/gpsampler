@@ -1,7 +1,7 @@
 from itertools import product
 from functools import partial
 import numpy as np
-from typing import Tuple, TextIO
+from typing import Tuple, TextIO, Iterable
 from scipy import linalg, stats
 from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
@@ -64,20 +64,31 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "noise_vars": [1e-3],  # noise_variance
                      "Ns": [2**i for i in range(8, 14)],  # no. of data points
                      }
-param_set_1 = {"ds": [2],  # input (x) dimensionality
-               "ls": np.linspace(min_l, max_l, 1),  # length scale
-               "sigmas": [1.0],  # kernel scale
-               "noise_vars": [1e-3],  # noise_variance
-               "Ns": [int(100e3)],  # no. of data points
-               }
+problem_param_set = {"ds": [2],  # input (x) dimensionality
+                     # np.linspace(min_l, max_l, size_l),  # length scale
+                     "ls": [1e-1, 0.5, 1, 2],
+                     "sigmas": [1.0],  # kernel scale
+                     "noise_vars": [1e-3],  # noise_variance
+                     "Ns": [2**i for i in range(8, 14)],  # no. of data points
+                     }
+paper_param_set = {"ds": [2],  # input (x) dimensionality
+                   # np.linspace(min_l, max_l, size_l),  # length scale
+                   "ls": [1e-3, 2],
+                   "sigmas": [1.0],  # kernel scale
+                   "noise_vars": [1e-3],  # noise_variance
+                   "Ns": [2**i for i in range(8, 14)],  # no. of data points
+                   }
 
 
-param_sets = {0: default_param_set.values(), 1: param_set_1.values(), 2: []}
+param_sets = {
+    0: default_param_set.values(),
+    1: problem_param_set.values(),
+    2: paper_param_set.values()}
 
 
 def sweep_fun(
         tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool,
-        benchmark: bool, significance_threshold: float) -> None:
+        benchmark: bool, significance_threshold: float, with_pre: bool) -> None:
     """ Run experiment over a tuple of parameters NO_TRIALS times, writing to a
     csvfile. Supports RFF and CIQ methods.
 
@@ -94,7 +105,10 @@ def sweep_fun(
         ValueError: If method other than "rff" or "ciq" used
     """
     d, l, sigma, noise_var, N = tup
-    max_preconditioner_size = 0  # int(np.sqrt(N))
+    if with_pre:
+        max_preconditioner_size = int(np.sqrt(N))
+    else:
+        max_preconditioner_size = 0
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
     theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
@@ -159,19 +173,20 @@ def sweep_fun(
         print(row_str, file=csvfile, flush=True)
 
 
-def run_sweep(
-        ds, ls, sigmas, noise_vars, Ns, verbose=True, NO_TRIALS=1,
-        significance_threshold=0.1, param_index=0, benchmark=False, ncpus=2,
-        method="rff", job_id=0) -> None:
+def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
+              noise_vars: Iterable, Ns: Iterable, verbose: bool = True,
+              NO_TRIALS: int = 1, significance_threshold: float = 0.1,
+              param_index: int = 0, benchmark: bool = False, ncpus: int = 2,
+              method: str = "rff", job_id: int = 0, with_pre: bool = False) -> None:
     """ Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
 
     Args:
-        ds (_type_): Array of dimensions to test over
-        ls (_type_): Array of lengthscales to test over
-        sigmas (_type_): Array of kernelscales to test over
-        noise_vars (_type_): Array of noise variances to test over
-        Ns (_type_): Array of sample sizes to test over
+        ds (Iterable): Array of dimensions to test over
+        ls (Iterable): Array of lengthscales to test over
+        sigmas (Iterable): Array of kernelscales to test over
+        noise_vars (Iterable): Array of noise variances to test over
+        Ns (Iterable): Array of sample sizes to test over
         verbose (bool, optional): Print to console?. Defaults to True.
         NO_TRIALS (int, optional): #Repeats. Defaults to 1.
         significance_threshold (float, optional): alpha. Defaults to 0.1.
@@ -191,15 +206,16 @@ def run_sweep(
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
         print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
-            Parallel(n_jobs=ncpus, require="sharedmem")(
-                delayed(sweep_fun)(tup, method, csvfile, NO_TRIALS,
-                                   verbose, benchmark, significance_threshold)
-                for tup in product(ds, ls, sigmas, noise_vars, Ns)
-            )
+            Parallel(
+                n_jobs=ncpus, require="sharedmem")(
+                delayed(sweep_fun)
+                (tup, method, csvfile, NO_TRIALS, verbose, benchmark,
+                 significance_threshold, with_pre)
+                for tup in product(ds, ls, sigmas, noise_vars, Ns))
         else:
             for tup in product(ds, ls, sigmas, noise_vars, Ns):
                 sweep_fun(tup, method, csvfile, NO_TRIALS, verbose,
-                          benchmark, significance_threshold)
+                          benchmark, significance_threshold, with_pre)
 
 
 if __name__ == "__main__":

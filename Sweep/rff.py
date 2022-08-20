@@ -144,7 +144,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
                       noise_var: float, kernelscale: float, lenscale: float,
-                      D: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      D: int) -> Tuple[np.ndarray, np.ndarray]:
     """ Generates a data sample from a MVN and a sample from an approximate GP using RFF
 
     Args:

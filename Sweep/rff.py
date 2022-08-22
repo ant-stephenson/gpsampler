@@ -6,6 +6,7 @@ import gpytorch
 from gpytorch.utils import contour_integral_quad
 from typing import Tuple, Optional
 from contextlib import ExitStack
+import warnings
 
 rng = np.random.default_rng()
 T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor
@@ -231,6 +232,7 @@ def sample_ciq_from_x(
         l, sigma)(
         torch.tensor(x)).add_jitter(
         eta * noise_var)
+    kernel.preconditioner_override = ID_Preconditioner
 
     with ExitStack() as stack:
         checkpoint_size = stack.enter_context(
@@ -250,6 +252,43 @@ def sample_ciq_from_x(
     # approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
     approx_cov = np.nan
     return y_noise, approx_cov
+
+def ID_Preconditioner(self):
+    if gpytorch.settings.max_preconditioner_size.value() == 0 or self.size(-1) < gpytorch.settings.min_preconditioning_size.value():
+        return None, None, None
+    
+    if self._q_cache is None:
+        
+        from gpytorch.lazy.matmul_lazy_tensor import MatmulLazyTensor
+        import scipy.linalg.interpolative as sli
+        
+        #get quantities & form sample matrix
+        n, k = self.shape[0], gpytorch.settings.max_preconditioner_size.value()
+
+        M = self._lazy_tensor.evaluate().detach().numpy()
+
+        U,s,V = sli.svd(M, k)
+        
+        #L = V @ S^0.5
+        L = V * (s ** 0.5)
+        
+        self._piv_chol_self = torch.as_tensor(L)
+        
+        if torch.any(torch.isnan(self._piv_chol_self)).item():
+            warnings.warn(
+                "NaNs encountered in preconditioner computation. Attempting to continue without preconditioning."
+            )
+            return None, None, None
+        self._init_cache()
+        
+    def precondition_closure(tensor):
+        # This makes it fast to compute solves with it
+        qqt = self._q_cache.matmul(self._q_cache.transpose(-2, -1).matmul(tensor))
+        if self._constant_diag:
+            return (1 / self._noise) * (tensor - qqt)
+        return (tensor / self._noise) - qqt
+
+    return (precondition_closure, self._precond_lt, self._precond_logdet_cache)
 
 
 if __name__ == '__main__':

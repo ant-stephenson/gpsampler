@@ -177,7 +177,7 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
               noise_vars: Iterable, Ns: Iterable, verbose: bool = True,
               NO_TRIALS: int = 1, significance_threshold: float = 0.1,
               param_index: int = 0, benchmark: bool = False, ncpus: int = 2,
-              method: str = "rff", job_id: int = 0, with_pre: bool = False) -> None:
+              method: str = "ciq", job_id: int = 0, with_pre: bool = True) -> None:
     """ Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
 
@@ -193,14 +193,19 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
         param_index (int, optional): Experiment label - currently not used effectively. Defaults to 0.
         benchmark (bool, optional): deprecated. Defaults to False.
         ncpus (int, optional): Number of CPUs to use. Defaults to 2.
-        method (str, optional): "rff" or "ciq". Defaults to "rff".
+        method (str, optional): "rff" or "ciq". Defaults to "ciq".
     """
-    if benchmark:
-        filename = f"output_sweep_{method}_{param_index}_{job_id}_bench.csv"
+    if __name__ == "__main__":
+        filename = f"output_sweep_{method}_{param_index}_{job_id}_TEST.csv"
+        overwrite = True
     else:
-        filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
+        if benchmark:
+            filename = f"output_sweep_{method}_{param_index}_{job_id}_bench.csv"
+        else:
+            filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
+        overwrite = False
 
-    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv")[0]
+    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv", overwrite=overwrite)[0]
 
     with open(filename, 'w', newline='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]

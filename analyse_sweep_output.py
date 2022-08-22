@@ -18,8 +18,9 @@ else:
     path = Path(".")
 #%%
 method = "ciq"
-job_id = 2513990#2504261#2479515
-sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_0_{job_id}.csv"))
+job_id = 999#2504261#2479515
+param_idx = 2
+sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_{param_idx}_{job_id}.csv"))
 sweep = sweep.sort_values(by=["N","D","l"])
 
 #%% compute approximate confidence interval on the rejection rate, by using the
@@ -63,8 +64,8 @@ def plot_reject_by_D(df: pd.DataFrame):
     ax2.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
     maxy = df.reject.max()
     
-    order_f = lambda n: n ** (1/2) * np.log10(n)
-    ax2.vlines(order_f(df.N.unique()), ymin=0, ymax=maxy, colors=palette)
+    order_f = lambda n, nv: (n/nv) ** (1/2) * np.log10(n)
+    ax2.vlines(order_f(df.N.unique(), df.noise_var.unique()), ymin=0, ymax=maxy, colors=palette)
     ax2.vlines(crossing_Ds.values(), ymin=0, ymax=maxy, colors=palette, ls="dotted")
     sig_thresh = 0.1
     ax2.axhline(sig_thresh, ls='--')
@@ -95,7 +96,7 @@ sweep_sub = sweep_grp.get_group(grp)
 #     height=5, aspect=.75, facet_kws=dict(sharex=False),
 # )
 
-plot_reject_by_D(sweep.loc[sweep.l == 2.0, :])
+# plot_reject_by_D(sweep.loc[sweep.l == 2.0, :])
 plot_reject_by_D(sweep)
 # %%- plot err vs reject (for particular value of l for now)
 ax3 = sns.lineplot(x="err", y="reject", hue="N", marker="D", data=sweep_sub)

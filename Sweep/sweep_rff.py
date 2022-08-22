@@ -50,7 +50,7 @@ def Js(d, l, sigma, noise_var, N):
     """
     # leave Q as default for now
     max_J = int(np.log2(N)) + 1
-    _Js = [2**i for i in range(4, max_J)]
+    _Js = [int(2**i//np.sqrt(noise_var)) for i in range(4, max_J)]
     return _Js
 
 
@@ -71,11 +71,11 @@ problem_param_set = {"ds": [2],  # input (x) dimensionality
                      "noise_vars": [1e-3],  # noise_variance
                      "Ns": [2**i for i in range(8, 14)],  # no. of data points
                      }
-paper_param_set = {"ds": [2],  # input (x) dimensionality
+paper_param_set = {"ds": [10],  # input (x) dimensionality
                    # np.linspace(min_l, max_l, size_l),  # length scale
-                   "ls": [1e-3, 2],
+                   "ls": [1e-1, 0.5, 1, 2],
                    "sigmas": [1.0],  # kernel scale
-                   "noise_vars": [1e-3],  # noise_variance
+                   "noise_vars": [1e-2],  # noise_variance
                    "Ns": [2**i for i in range(8, 14)],  # no. of data points
                    }
 

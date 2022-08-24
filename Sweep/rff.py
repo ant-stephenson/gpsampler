@@ -11,7 +11,7 @@ import warnings
 # warnings.simplefilter("error")
 
 rng = np.random.default_rng()
-T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor # type: ignore
 
 torch.set_default_tensor_type(T_TYPE)
 

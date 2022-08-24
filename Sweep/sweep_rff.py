@@ -205,9 +205,9 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
             filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
         overwrite = False
 
-    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv", overwrite=overwrite)[0]
+    filepath = check_exists(pathlib.Path(".").joinpath(filename), ".csv", overwrite=overwrite)[0]
 
-    with open(filename, 'w', newline='') as csvfile:
+    with open(filepath, 'w', newline='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
         print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
@@ -224,4 +224,4 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
 
 
 if __name__ == "__main__":
-    run_sweep(**default_param_set, method="ciq")
+    run_sweep(**default_param_set, method="ciq") # type: ignore

@@ -203,7 +203,7 @@ kl = np.empty(len(Drange))
 for i,Di in enumerate(Drange):
     kl[i]= test_KL(Di)
 # %% test ciq sqrt formation
-import rff.Sweep.rff as rff
+import rff
 rootKciq = rff.estimate_ciq_kernel(X, J, Q, b, ls)
 sqrt_err_ciq = np.linalg.norm(rootK - rootKciq, ord=2)
 np.linalg.norm(K - rootKciq @ rootKciq)

@@ -49,8 +49,8 @@ def Js(d, l, sigma, noise_var, N):
         _type_: _description_
     """
     # leave Q as default for now
-    max_J = int(np.log2(N)) + 1
-    _Js = [int(2**i//np.sqrt(noise_var)) for i in range(4, max_J)]
+    max_J = int(np.log2(np.sqrt(N / noise_var) * np.log(N))) + 1
+    _Js = [2**i for i in range(4, max_J)]
     return _Js
 
 
@@ -59,17 +59,17 @@ max_l = 1.0
 
 default_param_set = {"ds": [2],  # input (x) dimensionality
                      # np.linspace(min_l, max_l, size_l),  # length scale
-                     "ls": [1e-1, 0.5, 1, 2],
+                     "ls": [1e-3, 2],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(8, 14)],  # no. of data points
+                     "Ns": [2**i for i in range(7, 13)],  # no. of data points
                      }
 problem_param_set = {"ds": [2],  # input (x) dimensionality
                      # np.linspace(min_l, max_l, size_l),  # length scale
-                     "ls": [1e-1, 0.5, 1, 2],
+                     "ls": [1e-1, 1, 2],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(8, 14)],  # no. of data points
+                     "Ns": [2**i for i in range(7, 13)],  # no. of data points
                      }
 paper_param_set = {"ds": [10],  # input (x) dimensionality
                    # np.linspace(min_l, max_l, size_l),  # length scale
@@ -150,7 +150,7 @@ def sweep_fun(
             # pvalue unreliable (see doc) if estimating params
             reject += int(pvalue < significance_threshold)
 
-            if np.isnan(approx_cov):
+            if np.isnan(approx_cov).any():
                 approx_cov = approx_cov * avg_approx_cov
             avg_approx_cov += approx_cov
 
@@ -205,7 +205,9 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
             filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
         overwrite = False
 
-    filename = check_exists(pathlib.Path(".").joinpath(filename), ".csv", overwrite=overwrite)[0]
+    filename = check_exists(
+        pathlib.Path(".").joinpath(filename),
+        ".csv", overwrite=overwrite)[0]
 
     with open(filename, 'w', newline='') as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]

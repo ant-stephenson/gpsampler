@@ -8,8 +8,10 @@ from typing import Tuple, Optional
 from contextlib import ExitStack
 import warnings
 
+# warnings.simplefilter("error")
+
 rng = np.random.default_rng()
-T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor # type: ignore
 
 torch.set_default_tensor_type(T_TYPE)
 
@@ -34,7 +36,8 @@ def estimate_rff_kernel(
 
 
 def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
-    kernel = gpytorch.kernels.RBFKernel()
+    kernel = SparseKernel(gpytorch.kernels.RBFKernel())
+    # kernel = SparseRBFKernel()
     kernel = gpytorch.kernels.ScaleKernel(kernel)
     n_gpus = torch.cuda.device_count()
     if n_gpus > 1:
@@ -230,7 +233,7 @@ def sample_ciq_from_x(
 
     kernel = construct_kernels(
         l, sigma)(
-        torch.tensor(x)).add_jitter(
+        torch.as_tensor(x)).add_jitter(
         eta * noise_var)
     kernel.preconditioner_override = ID_Preconditioner
 
@@ -290,6 +293,55 @@ def ID_Preconditioner(self):
 
     return (precondition_closure, self._precond_lt, self._precond_logdet_cache)
 
+class SparseRBFKernel(gpytorch.kernels.RBFKernel):
+    is_stationary = True
+    has_lengthscale = True
+
+    def forward(self, x1, x2, diag=False, **params):
+        dist = super().forward(x1, x2, diag=diag, **params)
+        dist.where(dist.abs() < 1e-16, torch.as_tensor(0.0))
+        return dist
+
+class SparseKernel(gpytorch.kernels.Kernel):
+    """Wrapper similar to ScaleKernel to sparsify off-diag kernel elements if
+    they have value less than double precision epsilon (1e-16).
+    """
+    def __init__(self, base_kernel, **kwargs):
+        if base_kernel.active_dims is not None:
+            kwargs["active_dims"] = base_kernel.active_dims
+        self.has_lengthscale = base_kernel.has_lengthscale
+        super(SparseKernel, self).__init__(**kwargs)
+        self.base_kernel = base_kernel
+
+    @property
+    def is_stationary(self) -> bool:
+        """
+        Kernel is stationary if base kernel is stationary.
+        """
+        return self.base_kernel.is_stationary
+
+    @property
+    def lengthscale(self):
+        return self.base_kernel.lengthscale
+
+    @lengthscale.setter
+    def lengthscale(self, value):
+        self.base_kernel._set_lengthscale(value)
+
+    def forward(self, x1, x2, last_dim_is_batch=False, diag=False, **params):
+        orig_output = self.base_kernel.forward(x1, x2, diag=diag, last_dim_is_batch=last_dim_is_batch, **params)
+        orig_output.where(orig_output.abs() < 1e-16, torch.as_tensor(0.0))
+        if diag:
+            return gpytorch.delazify(orig_output)
+        else:
+            return orig_output
+
+    def num_outputs_per_input(self, x1, x2):
+        return self.base_kernel.num_outputs_per_input(x1, x2)
+
+    def prediction_strategy(self, train_inputs, train_prior_dist, train_labels, likelihood):
+        return self.base_kernel.prediction_strategy(train_inputs, train_prior_dist, train_labels, likelihood)
+
 
 if __name__ == '__main__':
     N = 500  # no. of data points
@@ -323,9 +375,9 @@ lenscale %.2f
         )
     )
 
-    # x, sample = generate_ciq_data(
-    #     N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
-    x, sample = generate_rff_data(N, xmean, xcov_diag, noise_var, sigma, l, D)
+    x, sample = generate_ciq_data(
+        N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
+    # x, sample = generate_rff_data(N, xmean, xcov_diag, noise_var, sigma, l, D)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)
     # np.savetxt("noisy_sample.out.gz", noisy_sample)

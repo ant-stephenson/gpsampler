@@ -62,21 +62,21 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      "ls": [1e-3, 2],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(7, 13)],  # no. of data points
+                     "Ns": [2**i for i in range(8, 13)],  # no. of data points
                      }
 problem_param_set = {"ds": [2],  # input (x) dimensionality
                      # np.linspace(min_l, max_l, size_l),  # length scale
-                     "ls": [1e-1, 1, 2],
+                     "ls": [1],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(7, 13)],  # no. of data points
+                     "Ns": [2**i for i in range(11, 12)],  # no. of data points
                      }
 paper_param_set = {"ds": [10],  # input (x) dimensionality
                    # np.linspace(min_l, max_l, size_l),  # length scale
                    "ls": [1e-1, 0.5, 1, 2],
                    "sigmas": [1.0],  # kernel scale
                    "noise_vars": [1e-2],  # noise_variance
-                   "Ns": [2**i for i in range(8, 14)],  # no. of data points
+                   "Ns": [2**i for i in range(8, 13)],  # no. of data points
                    }
 
 
@@ -108,7 +108,8 @@ def sweep_fun(
     if with_pre:
         max_preconditioner_size = int(np.sqrt(N))
     else:
-        max_preconditioner_size = 0
+        pass
+    max_preconditioner_size = 0
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
     theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
@@ -122,6 +123,7 @@ def sweep_fun(
         _Ds = Js
         sampling_function = partial(
             rff.sample_ciq_from_x,
+            Q=int(np.log(N)),
             max_preconditioner_size=max_preconditioner_size)
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
@@ -157,7 +159,7 @@ def sweep_fun(
         # record variance as well as mean?
         reject /= NO_TRIALS
         avg_approx_cov /= NO_TRIALS
-        if np.isnan(avg_approx_cov).any() or np.isnan(theory_cov_noise):
+        if np.isnan(avg_approx_cov).any() or np.isnan(theory_cov_noise).any():
             err = np.nan
         else:
             err = linalg.norm(theory_cov_noise - avg_approx_cov)
@@ -177,7 +179,7 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
               noise_vars: Iterable, Ns: Iterable, verbose: bool = True,
               NO_TRIALS: int = 1, significance_threshold: float = 0.1,
               param_index: int = 0, benchmark: bool = False, ncpus: int = 2,
-              method: str = "ciq", job_id: int = 0, with_pre: bool = True) -> None:
+              method: str = "ciq", job_id: int = 0, with_pre: bool = False) -> None:
     """ Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
 

@@ -11,7 +11,8 @@ import warnings
 # warnings.simplefilter("error")
 
 rng = np.random.default_rng()
-T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor # type: ignore
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available(
+) else torch.DoubleTensor  # type: ignore
 
 torch.set_default_tensor_type(T_TYPE)
 
@@ -36,8 +37,8 @@ def estimate_rff_kernel(
 
 
 def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
-    kernel = SparseKernel(gpytorch.kernels.RBFKernel())
-    # kernel = SparseRBFKernel()
+    # kernel = SparseKernel(gpytorch.kernels.RBFKernel())
+    kernel = gpytorch.kernels.RBFKernel()
     kernel = gpytorch.kernels.ScaleKernel(kernel)
     n_gpus = torch.cuda.device_count()
     if n_gpus > 1:
@@ -243,7 +244,7 @@ def sample_ciq_from_x(
         max_preconditioner_size = stack.enter_context(
             gpytorch.settings.max_preconditioner_size(max_preconditioner_size))
         min_preconditioning_size = stack.enter_context(
-            gpytorch.settings.min_preconditioning_size(100))
+            gpytorch.settings.min_preconditioning_size(10))
         # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
         solves, weights, _, _ = contour_integral_quad(
             kernel,
@@ -256,42 +257,46 @@ def sample_ciq_from_x(
     approx_cov = np.nan
     return y_noise, approx_cov
 
+
 def ID_Preconditioner(self):
-    if gpytorch.settings.max_preconditioner_size.value() == 0 or self.size(-1) < gpytorch.settings.min_preconditioning_size.value():
+    if gpytorch.settings.max_preconditioner_size.value() == 0 or self.size(
+            -1) < gpytorch.settings.min_preconditioning_size.value():
         return None, None, None
-    
+
     if self._q_cache is None:
-        
+
         from gpytorch.lazy.matmul_lazy_tensor import MatmulLazyTensor
         import scipy.linalg.interpolative as sli
-        
-        #get quantities & form sample matrix
+
+        # get quantities & form sample matrix
         n, k = self.shape[0], gpytorch.settings.max_preconditioner_size.value()
 
         M = self._lazy_tensor.evaluate().detach().numpy()
 
-        U,s,V = sli.svd(M, k)
-        
+        U, s, V = sli.svd(M, k)
+
         #L = V @ S^0.5
         L = V * (s ** 0.5)
-        
+
         self._piv_chol_self = torch.as_tensor(L)
-        
+
         if torch.any(torch.isnan(self._piv_chol_self)).item():
             warnings.warn(
                 "NaNs encountered in preconditioner computation. Attempting to continue without preconditioning."
             )
             return None, None, None
         self._init_cache()
-        
+
     def precondition_closure(tensor):
         # This makes it fast to compute solves with it
-        qqt = self._q_cache.matmul(self._q_cache.transpose(-2, -1).matmul(tensor))
+        qqt = self._q_cache.matmul(
+            self._q_cache.transpose(-2, -1).matmul(tensor))
         if self._constant_diag:
             return (1 / self._noise) * (tensor - qqt)
         return (tensor / self._noise) - qqt
 
     return (precondition_closure, self._precond_lt, self._precond_logdet_cache)
+
 
 class SparseRBFKernel(gpytorch.kernels.RBFKernel):
     is_stationary = True
@@ -302,10 +307,12 @@ class SparseRBFKernel(gpytorch.kernels.RBFKernel):
         dist.where(dist.abs() < 1e-16, torch.as_tensor(0.0))
         return dist
 
+
 class SparseKernel(gpytorch.kernels.Kernel):
     """Wrapper similar to ScaleKernel to sparsify off-diag kernel elements if
     they have value less than double precision epsilon (1e-16).
     """
+
     def __init__(self, base_kernel, **kwargs):
         if base_kernel.active_dims is not None:
             kwargs["active_dims"] = base_kernel.active_dims
@@ -329,7 +336,8 @@ class SparseKernel(gpytorch.kernels.Kernel):
         self.base_kernel._set_lengthscale(value)
 
     def forward(self, x1, x2, last_dim_is_batch=False, diag=False, **params):
-        orig_output = self.base_kernel.forward(x1, x2, diag=diag, last_dim_is_batch=last_dim_is_batch, **params)
+        orig_output = self.base_kernel.forward(
+            x1, x2, diag=diag, last_dim_is_batch=last_dim_is_batch, **params)
         orig_output.where(orig_output.abs() < 1e-16, torch.as_tensor(0.0))
         if diag:
             return gpytorch.delazify(orig_output)
@@ -339,8 +347,10 @@ class SparseKernel(gpytorch.kernels.Kernel):
     def num_outputs_per_input(self, x1, x2):
         return self.base_kernel.num_outputs_per_input(x1, x2)
 
-    def prediction_strategy(self, train_inputs, train_prior_dist, train_labels, likelihood):
-        return self.base_kernel.prediction_strategy(train_inputs, train_prior_dist, train_labels, likelihood)
+    def prediction_strategy(
+            self, train_inputs, train_prior_dist, train_labels, likelihood):
+        return self.base_kernel.prediction_strategy(
+            train_inputs, train_prior_dist, train_labels, likelihood)
 
 
 if __name__ == '__main__':

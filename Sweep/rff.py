@@ -249,6 +249,12 @@ def sample_ciq_from_x(
         eta * noise_var)
     kernel.preconditioner_override = ID_Preconditioner
 
+    # not sure why I need this yet but...
+    if max_preconditioner_size == 0:
+        ciqfun = contour_integral_quad
+    else:
+        ciqfun = gpytorch.utils.contour_integral_quad
+
     with ExitStack() as stack:
         checkpoint_size = stack.enter_context(
             gpytorch.beta_features.checkpoint_kernel(checkpoint_size))
@@ -259,7 +265,7 @@ def sample_ciq_from_x(
         minres_tol = stack.enter_context(
             gpytorch.settings.minres_tolerance(1e-10))
         # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
-        solves, weights, _, _ = contour_integral_quad(
+        solves, weights, _, _ = ciqfun(
             kernel,
             torch.as_tensor(u.reshape(-1, 1)),
             max_lanczos_iter=J, num_contour_quadrature=Q)
@@ -345,10 +351,6 @@ def contour_integral_quad(
         # Compute an approximate condition number
         # We'll do this with Lanczos
         try:
-            if gpytorch.settings.verbose_linalg.on():
-                gpytorch.settings.verbose_linalg.logger.debug(
-                    f"Running symeig on a matrix of size {lanczos_mat.shape}.")
-
             approx_eigs = lanczos_mat.symeig()[0]
             if approx_eigs.min() <= 0:
                 raise RuntimeError

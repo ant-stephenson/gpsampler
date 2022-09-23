@@ -22,7 +22,8 @@ from gpytorch.utils.warnings import NumericalWarning
 # warnings.simplefilter("error")
 
 rng = np.random.default_rng()
-T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available() else torch.DoubleTensor # type: ignore
+T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available(
+) else torch.DoubleTensor  # type: ignore
 
 torch.set_default_tensor_type(T_TYPE)
 
@@ -47,8 +48,8 @@ def estimate_rff_kernel(
 
 
 def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
-    kernel = SparseKernel(gpytorch.kernels.RBFKernel())
-    # kernel = SparseRBFKernel()
+    # kernel = SparseKernel(gpytorch.kernels.RBFKernel())
+    kernel = gpytorch.kernels.RBFKernel()
     kernel = gpytorch.kernels.ScaleKernel(kernel)
     n_gpus = torch.cuda.device_count()
     if n_gpus > 1:
@@ -248,6 +249,12 @@ def sample_ciq_from_x(
         eta * noise_var)
     kernel.preconditioner_override = ID_Preconditioner
 
+    # not sure why I need this yet but...
+    if max_preconditioner_size == 0:
+        ciqfun = contour_integral_quad
+    else:
+        ciqfun = gpytorch.utils.contour_integral_quad
+
     with ExitStack() as stack:
         checkpoint_size = stack.enter_context(
             gpytorch.beta_features.checkpoint_kernel(checkpoint_size))
@@ -255,9 +262,10 @@ def sample_ciq_from_x(
             gpytorch.settings.max_preconditioner_size(max_preconditioner_size))
         min_preconditioning_size = stack.enter_context(
             gpytorch.settings.min_preconditioning_size(100))
-        minres_tol = stack.enter_context(gpytorch.settings.minres_tolerance(1e-10))
+        minres_tol = stack.enter_context(
+            gpytorch.settings.minres_tolerance(1e-10))
         # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
-        solves, weights, _, _ = contour_integral_quad(
+        solves, weights, _, _ = ciqfun(
             kernel,
             torch.as_tensor(u.reshape(-1, 1)),
             max_lanczos_iter=J, num_contour_quadrature=Q)
@@ -295,12 +303,14 @@ def contour_integral_quad(
     if num_contour_quadrature is None:
         num_contour_quadrature = gpytorch.settings.num_contour_quadrature.value()
 
-    output_batch_shape = _mul_broadcast_shape(lazy_tensor.batch_shape, rhs.shape[:-2])
+    output_batch_shape = _mul_broadcast_shape(
+        lazy_tensor.batch_shape, rhs.shape[:-2])
     preconditioner, preconditioner_lt, _ = lazy_tensor._preconditioner()
 
     def sqrt_precond_matmul(rhs):
         if preconditioner_lt is not None:
-            solves, weights, _, _ = contour_integral_quad(preconditioner_lt, rhs, inverse=False)
+            solves, weights, _, _ = contour_integral_quad(
+                preconditioner_lt, rhs, inverse=False)
             return (solves * weights).sum(0)
         else:
             return rhs
@@ -312,10 +322,14 @@ def contour_integral_quad(
         # Determine if init_vecs has extra_dimensions
         num_extra_dims = max(0, rhs.dim() - lazy_tensor.dim())
         lanczos_init = rhs.__getitem__(
-            (*([0] * num_extra_dims), Ellipsis, slice(None, None, None), slice(None, 1, None))
-        ).expand(*lazy_tensor.shape[:-1], 1)
+            (*([0] * num_extra_dims),
+             Ellipsis, slice(None, None, None),
+             slice(None, 1, None))).expand(
+            *lazy_tensor.shape[: -1],
+            1)
         with warnings.catch_warnings(), torch.no_grad():
-            warnings.simplefilter("ignore", NumericalWarning)  # Supress CG stopping warning
+            # Supress CG stopping warning
+            warnings.simplefilter("ignore", NumericalWarning)
             _, lanczos_mat = linear_cg(
                 lambda v: lazy_tensor._matmul(v),
                 rhs=lanczos_init,
@@ -325,7 +339,8 @@ def contour_integral_quad(
                 max_tridiag_iter=max_lanczos_iter,
                 preconditioner=preconditioner,
             )
-            lanczos_mat = lanczos_mat.squeeze(0)  # We have an extra singleton batch dimension from the Lanczos init
+            # We have an extra singleton batch dimension from the Lanczos init
+            lanczos_mat = lanczos_mat.squeeze(0)
 
         """
         K^{-1/2} b = 2/pi \int_0^\infty (K - t^2 I)^{-1} dt
@@ -336,9 +351,6 @@ def contour_integral_quad(
         # Compute an approximate condition number
         # We'll do this with Lanczos
         try:
-            if gpytorch.settings.verbose_linalg.on():
-                gpytorch.settings.verbose_linalg.logger.debug(f"Running symeig on a matrix of size {lanczos_mat.shape}.")
-
             approx_eigs = lanczos_mat.symeig()[0]
             if approx_eigs.min() <= 0:
                 raise RuntimeError
@@ -350,22 +362,30 @@ def contour_integral_quad(
         k2 = min_eig / max_eig
 
         # Compute the shifts needed for the contour
-        flat_shifts = torch.zeros(num_contour_quadrature + 1, k2.numel(), dtype=k2.dtype, device=k2.device)
-        flat_weights = torch.zeros(num_contour_quadrature, k2.numel(), dtype=k2.dtype, device=k2.device)
+        flat_shifts = torch.zeros(
+            num_contour_quadrature + 1, k2.numel(),
+            dtype=k2.dtype, device=k2.device)
+        flat_weights = torch.zeros(
+            num_contour_quadrature, k2.numel(),
+            dtype=k2.dtype, device=k2.device)
 
         # For loop because numpy
-        for i, (sub_k2, sub_min_eig) in enumerate(zip(k2.flatten().tolist(), min_eig.flatten().tolist())):
+        for i, (sub_k2, sub_min_eig) in enumerate(
+            zip(k2.flatten().tolist(),
+                min_eig.flatten().tolist())):
             # Compute shifts
             Kp = ellipk(1 - sub_k2)  # Elliptical integral of the first kind
             N = num_contour_quadrature
             t = 1j * (np.arange(1, N + 1) - 0.5) * Kp / N
-            sn, cn, dn, _ = ellipj(np.imag(t), 1 - sub_k2)  # Jacobi elliptic functions
+            # Jacobi elliptic functions
+            sn, cn, dn, _ = ellipj(np.imag(t), 1 - sub_k2)
             cn = 1.0 / cn
             dn = dn * cn
             sn = 1j * sn * cn
             w = np.sqrt(sub_min_eig) * sn
             w_pow2 = np.real(np.power(w, 2))
-            sub_shifts = torch.tensor(w_pow2, dtype=rhs.dtype, device=rhs.device)
+            sub_shifts = torch.tensor(
+                w_pow2, dtype=rhs.dtype, device=rhs.device)
 
             # Compute weights
             constant = -2 * Kp * np.sqrt(sub_min_eig) / (math.pi * N)
@@ -383,13 +403,18 @@ def contour_integral_quad(
 
         # Make sure we have the right shape
         if k2.shape != output_batch_shape:
-            weights = torch.stack([w.expand(*output_batch_shape, 1, 1) for w in weights], 0)
-            shifts = torch.stack([s.expand(output_batch_shape) for s in shifts], 0)
+            weights = torch.stack(
+                [w.expand(*output_batch_shape, 1, 1) for w in weights], 0)
+            shifts = torch.stack([s.expand(output_batch_shape)
+                                  for s in shifts], 0)
 
     # Compute the solves at the given shifts
     # Do one more matmul if we don't want to include the inverse
     with torch.no_grad():
-        solves = minres(lambda v: lazy_tensor._matmul(v), rhs, value=-1, shifts=shifts, preconditioner=preconditioner, max_iter=max_lanczos_iter)
+        solves = minres(lambda v: lazy_tensor._matmul(v),
+                        rhs, value=-1, shifts=shifts,
+                        preconditioner=preconditioner,
+                        max_iter=max_lanczos_iter)
     no_shift_solves = solves[0]
     solves = solves[1:]
     if not inverse:
@@ -399,41 +424,44 @@ def contour_integral_quad(
 
 
 def ID_Preconditioner(self):
-    if gpytorch.settings.max_preconditioner_size.value() == 0 or self.size(-1) < gpytorch.settings.min_preconditioning_size.value():
+    if gpytorch.settings.max_preconditioner_size.value() == 0 or self.size(
+            -1) < gpytorch.settings.min_preconditioning_size.value():
         return None, None, None
-    
+
     if self._q_cache is None:
-        
+
         from gpytorch.lazy.matmul_lazy_tensor import MatmulLazyTensor
         import scipy.linalg.interpolative as sli
-        
-        #get quantities & form sample matrix
+
+        # get quantities & form sample matrix
         n, k = self.shape[0], gpytorch.settings.max_preconditioner_size.value()
 
         M = self._lazy_tensor.evaluate().detach().numpy()
 
-        U,s,V = sli.svd(M, k)
-        
+        U, s, V = sli.svd(M, k)
+
         #L = V @ S^0.5
         L = V * (s ** 0.5)
-        
+
         self._piv_chol_self = torch.as_tensor(L)
-        
+
         if torch.any(torch.isnan(self._piv_chol_self)).item():
             warnings.warn(
                 "NaNs encountered in preconditioner computation. Attempting to continue without preconditioning."
             )
             return None, None, None
         self._init_cache()
-        
+
     def precondition_closure(tensor):
         # This makes it fast to compute solves with it
-        qqt = self._q_cache.matmul(self._q_cache.transpose(-2, -1).matmul(tensor))
+        qqt = self._q_cache.matmul(
+            self._q_cache.transpose(-2, -1).matmul(tensor))
         if self._constant_diag:
             return (1 / self._noise) * (tensor - qqt)
         return (tensor / self._noise) - qqt
 
     return (precondition_closure, self._precond_lt, self._precond_logdet_cache)
+
 
 class SparseRBFKernel(gpytorch.kernels.RBFKernel):
     is_stationary = True
@@ -444,10 +472,12 @@ class SparseRBFKernel(gpytorch.kernels.RBFKernel):
         dist.where(dist.abs() < 1e-16, torch.as_tensor(0.0))
         return dist
 
+
 class SparseKernel(gpytorch.kernels.Kernel):
     """Wrapper similar to ScaleKernel to sparsify off-diag kernel elements if
     they have value less than double precision epsilon (1e-16).
     """
+
     def __init__(self, base_kernel, **kwargs):
         if base_kernel.active_dims is not None:
             kwargs["active_dims"] = base_kernel.active_dims
@@ -471,7 +501,8 @@ class SparseKernel(gpytorch.kernels.Kernel):
         self.base_kernel._set_lengthscale(value)
 
     def forward(self, x1, x2, last_dim_is_batch=False, diag=False, **params):
-        orig_output = self.base_kernel.forward(x1, x2, diag=diag, last_dim_is_batch=last_dim_is_batch, **params)
+        orig_output = self.base_kernel.forward(
+            x1, x2, diag=diag, last_dim_is_batch=last_dim_is_batch, **params)
         orig_output.where(orig_output.abs() < 1e-16, torch.as_tensor(0.0))
         if diag:
             return gpytorch.delazify(orig_output)
@@ -481,8 +512,10 @@ class SparseKernel(gpytorch.kernels.Kernel):
     def num_outputs_per_input(self, x1, x2):
         return self.base_kernel.num_outputs_per_input(x1, x2)
 
-    def prediction_strategy(self, train_inputs, train_prior_dist, train_labels, likelihood):
-        return self.base_kernel.prediction_strategy(train_inputs, train_prior_dist, train_labels, likelihood)
+    def prediction_strategy(
+            self, train_inputs, train_prior_dist, train_labels, likelihood):
+        return self.base_kernel.prediction_strategy(
+            train_inputs, train_prior_dist, train_labels, likelihood)
 
 
 if __name__ == '__main__':

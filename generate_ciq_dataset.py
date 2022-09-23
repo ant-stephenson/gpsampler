@@ -5,7 +5,7 @@ import argparse
 
 import numpy as np
 
-from rff import generate_ciq_data
+from gpsampler import generate_ciq_data
 
 MAX_ITERATIONS = 42010 # On a 16GB GPU, we found empirically this is close to the largest feasible value (larger => more memory)
 CHECKPOINT_SIZE = 1500 # Also found empirically on 16GB GPU. Increase if a bigger card is available.

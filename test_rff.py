@@ -15,7 +15,7 @@ from typing import Tuple
 import warnings
 from pathlib import Path
 
-import rff
+import gpsampler
 
 #%%
 if isnotebook():
@@ -205,12 +205,11 @@ kl = np.empty(len(Drange))
 for i,Di in enumerate(Drange):
     kl[i]= test_KL(Di)
 # %% test ciq sqrt formation
-import rff
-rootKciq = rff.estimate_ciq_kernel(X, J, Q, b, ls)
+rootKciq = gpsampler.estimate_ciq_kernel(X, J, Q, b, ls)
 sqrt_err_ciq = np.linalg.norm(rootK - rootKciq, ord=2)
 np.linalg.norm(K - rootKciq @ rootKciq)
 # %%
-data = rff.generate_ciq_data(1000, np.ones(3), np.ones(3), 0.1, 0.9, 1.0, 10, 10)
+data = gpsampler.generate_ciq_data(1000, np.ones(3), np.ones(3), 0.1, 0.9, 1.0, 10, 10)
 
 #%%
 #%% - plot J as a function of C and d for theoretical prediction based on

@@ -1,4 +1,4 @@
-from .rff import construct_kernels
+from .gpsampler import construct_kernels
 
 """ 
 Install with `pip install -e .`

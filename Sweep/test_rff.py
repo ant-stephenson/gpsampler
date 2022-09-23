@@ -15,6 +15,8 @@ from typing import Tuple
 import warnings
 from pathlib import Path
 
+import rff
+
 #%%
 if isnotebook():
     path = Path("..")
@@ -26,7 +28,7 @@ ls = 1.1
 b = 1
 
 rng = np.random.default_rng(1)
-d = 10
+d = 1
 
 n = 100
 #%% define functions to compute/generate actual data
@@ -230,3 +232,73 @@ for i,_ax in enumerate(ax.flatten()):
     _ax.set_ylabel("d")
 plt.suptitle("J")
 # save_fig(Path("."), filename="J_contours_C_d",suffix="png")
+
+#%%
+tol = 1e-6
+_n = 100
+_ls = np.logspace(np.log10(1e-3),np.log10(10),_n)
+_ds = [1,2,3,4]
+a = lambda d,l: (1+2/(d*l**2))**(-d/2)
+shape = (_n,4,10)
+cond = np.zeros(shape)
+rank = np.zeros(shape)
+approx_rank = np.zeros(shape)
+expected_cond = np.zeros(shape)
+for k in range(10):
+    for i,l in enumerate(_ls):
+        for j,d in enumerate(_ds):
+            K = ds.sample_rbf_kernel(n=_n, ls=l, d=d)
+            cond[i,j,k] = np.linalg.cond(K)
+            rank[i,j,k] = np.linalg.matrix_rank(K, tol=tol)
+            approx_rank[i,j,k] = _n - d + np.log(tol/_n)
+            expected_cond[i,j,k] = (1+(_n-1)*a(d,l))/(1-a(d,l))
+cond = cond.mean(axis=2)
+rank = rank.mean(axis=2)
+approx_rank = approx_rank.mean(axis=2)
+expected_cond = expected_cond.mean(axis=2)
+# %%
+# create figure and axis objects with subplots()
+fig,ax = plt.subplots()
+# make a plot
+ax.plot(_ls, cond[:,0]/1e8,
+        color="red")
+ax.plot(_ls, cond[:,1]/1e8,
+        color="red", linestyle="--")
+ax.axhline(_n/1e2, color="black", linestyle="-.")
+# set y-axis label
+ax.set_ylabel("Condition Number/1e8",
+              color="red",
+              fontsize=14)
+ax.set_xlabel("Lengthscale")              
+# twin object for two different y-axis on the sample plot
+ax2=ax.twinx()
+# make a plot with different y-axis using second axis object
+ax2.plot(_ls, rank[:,0], color="blue")
+ax2.plot(_ls, rank[:,1], color="blue", linestyle="--")
+# ax2.plot(_ls, approx_rank[:,0], color="green")
+# eps = 1e-6
+# ax2.axhline(9*np.log(_n)/(eps**2-eps**3))
+with gplt.LaTeX():
+    ax2.set_ylabel("Numerical. rank; $\epsilon=1e-6$",color="blue",fontsize=14)
+plt.title("RBF-Kernel properties")
+plt.legend(["d=1","d=2"])
+leg = ax2.get_legend()
+[lgd.set_color('black') for lgd in leg.legendHandles]
+# plt.show()
+# gplt.save_fig(path, f"rbf_k_cond-rank_by_l", suffix="eps", show=True, dpi=600, overwrite=True)
+# %%
+def crossing_pt(cond, rank):
+    cross = np.where(cond/cond.max() * rank.max() - rank > 0)[0]
+    if cross.size > 0:
+        return np.min(cross)
+    else:
+        return np.nan
+# %%
+cross = np.zeros(4)
+for i,(c,r) in enumerate(zip(cond.T,rank.T)):
+    cross[i] = crossing_pt(c,r)
+valid_elems = np.logical_not(np.isnan(cross))
+idxd = np.where(valid_elems)[0]
+idxl = [int(_c) for _c in cross[valid_elems]]
+plt.plot(np.asarray(_ds)[idxd], _ls[idxl])
+# %%

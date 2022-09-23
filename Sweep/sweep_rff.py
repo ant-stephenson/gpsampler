@@ -30,7 +30,7 @@ def Ds(d, l, sigma, noise_var, N):
         _type_: _description_
     """
     max_D = int(np.log2(N**2)) + 1
-    _Ds = [2**i for i in range(max_D)]
+    _Ds = [2**i for i in range(16, max_D)]
     return _Ds
 
 
@@ -108,7 +108,7 @@ def sweep_fun(
     if with_pre:
         max_preconditioner_size = int(np.sqrt(N))
     else:
-        pass
+        max_preconditioner_size = 0
     max_preconditioner_size = 0
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
@@ -133,13 +133,12 @@ def sweep_fun(
         print(
             "***d = %d, l = %.2e, sigma = %.2e, noise_var = %.2e, N = %d***" %
             tup, flush=True)
-        print(f"max_preconditioner_size={max_preconditioner_size}", flush=True)
     for D in _Ds(*tup):
         avg_approx_cov = theory_cov_noise * 0
         reject = 0.0
         for j in range(NO_TRIALS):
             if benchmark:
-                y_noise = rng.multivariate_normal(0, theory_cov_noise, N)
+                y_noise = rng.multivariate_normal(np.zeros(N), theory_cov_noise)
                 approx_cov = theory_cov_noise
             else:
                 y_noise, approx_cov = sampling_function(
@@ -167,6 +166,9 @@ def sweep_fun(
 
         if verbose:
             print("D = %d" % D, flush=True)
+            print(
+                f"max_preconditioner_size={max_preconditioner_size}",
+                flush=True)
             print("Norm difference between average approximate and exact K: %.6f" %
                   err, flush=True)
             print("%.2f%% rejected" % (reject*100), flush=True)
@@ -177,7 +179,7 @@ def sweep_fun(
 
 def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
               noise_vars: Iterable, Ns: Iterable, verbose: bool = True,
-              NO_TRIALS: int = 1, significance_threshold: float = 0.1,
+              NO_TRIALS: int = 10, significance_threshold: float = 0.1,
               param_index: int = 0, benchmark: bool = False, ncpus: int = 2,
               method: str = "ciq", job_id: int = 0, with_pre: bool = False) -> None:
     """ Runs experiments over all sets of parameters. Runs in parallel if

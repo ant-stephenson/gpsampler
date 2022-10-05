@@ -264,8 +264,10 @@ def sample_ciq_from_x(
             gpytorch.settings.min_preconditioning_size(100))
         minres_tol = stack.enter_context(
             gpytorch.settings.minres_tolerance(1e-10))
-        # print(gpytorch.settings.max_preconditioner_size.value(), flush=True)
-        solves, weights, _, _ = ciqfun(
+        _use_eval_tolerance = stack.enter_context(gpytorch.settings._use_eval_tolerance(True))
+        eval_cg_tolerance = stack.enter_context(gpytorch.settings.eval_cg_tolerance(1e-10))
+        max_cg_iterations = stack.enter_context(gpytorch.settings.max_cg_iterations(J))
+        solves, weights, _, _ = contour_integral_quad(
             kernel,
             torch.as_tensor(u.reshape(-1, 1)),
             max_lanczos_iter=J, num_contour_quadrature=Q)

@@ -66,10 +66,10 @@ default_param_set = {"ds": [2],  # input (x) dimensionality
                      }
 problem_param_set = {"ds": [2],  # input (x) dimensionality
                      # np.linspace(min_l, max_l, size_l),  # length scale
-                     "ls": [1],
+                     "ls": [0.1, 1, 2],
                      "sigmas": [1.0],  # kernel scale
                      "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(11, 12)],  # no. of data points
+                     "Ns": [2**i for i in range(8, 13)],  # no. of data points
                      }
 paper_param_set = {"ds": [10],  # input (x) dimensionality
                    # np.linspace(min_l, max_l, size_l),  # length scale
@@ -109,7 +109,7 @@ def sweep_fun(
         max_preconditioner_size = int(np.sqrt(N))
     else:
         max_preconditioner_size = 0
-    max_preconditioner_size = 0
+    # max_preconditioner_size = 0
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
     theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
@@ -125,6 +125,9 @@ def sweep_fun(
             gpsampler.sample_ciq_from_x,
             Q=int(np.log(N)),
             max_preconditioner_size=max_preconditioner_size)
+    elif method == "chol":
+        _Ds = lambda *args: [L]
+        sampling_function = gpsampler.sample_chol_from_x
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 
@@ -163,6 +166,9 @@ def sweep_fun(
         else:
             err = linalg.norm(theory_cov_noise - avg_approx_cov)
         errors.append(err)
+
+        if method == "chol":
+            D = -999
 
         if verbose:
             print("D = %d" % D, flush=True)
@@ -230,4 +236,4 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
 
 
 if __name__ == "__main__":
-    run_sweep(**default_param_set, method="ciq")  # type: ignore
+    run_sweep(**default_param_set, method="chol")  # type: ignore

@@ -188,6 +188,16 @@ def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     return x, noisy_sample
 
 
+def sample_chol_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
+                       rng: np.random.Generator, L: np.ndarray) -> Tuple[np.ndarray, np.
+                                                                         ndarray]:
+    n, d = x.shape
+    u = rng.standard_normal(n)
+    y_noise = L @ u
+    approx_cov = L @ L.T
+    return y_noise, approx_cov
+
+
 def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
                       rng: np.random.Generator, D: int) -> Tuple[np.ndarray, np.
                                                                  ndarray]:
@@ -264,9 +274,12 @@ def sample_ciq_from_x(
             gpytorch.settings.min_preconditioning_size(100))
         minres_tol = stack.enter_context(
             gpytorch.settings.minres_tolerance(1e-10))
-        _use_eval_tolerance = stack.enter_context(gpytorch.settings._use_eval_tolerance(True))
-        eval_cg_tolerance = stack.enter_context(gpytorch.settings.eval_cg_tolerance(1e-10))
-        max_cg_iterations = stack.enter_context(gpytorch.settings.max_cg_iterations(J))
+        _use_eval_tolerance = stack.enter_context(
+            gpytorch.settings._use_eval_tolerance(True))
+        eval_cg_tolerance = stack.enter_context(
+            gpytorch.settings.eval_cg_tolerance(1e-10))
+        max_cg_iterations = stack.enter_context(
+            gpytorch.settings.max_cg_iterations(J))
         solves, weights, _, _ = contour_integral_quad(
             kernel,
             torch.as_tensor(u.reshape(-1, 1)),

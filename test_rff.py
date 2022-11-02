@@ -248,8 +248,8 @@ for k in range(10):
     for i,l in enumerate(_ls):
         for j,d in enumerate(_ds):
             K = ds.sample_rbf_kernel(n=_n, ls=l, d=d)
-            cond[i,j,k] = linalg.cond(K)
-            rank[i,j,k] = linalg.matrix_rank(K, tol=tol)
+            cond[i,j,k] = np.linalg.cond(K)
+            rank[i,j,k] = np.linalg.matrix_rank(K, tol=tol)
             approx_rank[i,j,k] = _n - d + np.log(tol/_n)
             expected_cond[i,j,k] = (1+(_n-1)*a(d,l))/(1-a(d,l))
 cond = cond.mean(axis=2)
@@ -303,7 +303,7 @@ idxl = [int(_c) for _c in cross[valid_elems]]
 plt.plot(np.asarray(_ds)[idxd], _ls[idxl])
 ################################################################################
 #%%
-n = 1000
+n = 200
 d = 2
 l = 0.1
 sigma = 1.0

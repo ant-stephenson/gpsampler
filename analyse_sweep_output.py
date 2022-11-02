@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from gpybench.plotting import save_fig, LaTeX
+from gpybench.plotting import save_fig, LaTeX, ribbonplot
 from gpybench.utils import isnotebook
 from gpytools.utils import ordermag
 from nptyping import NDArray
@@ -12,15 +12,10 @@ from typing import Annotated, Final
  
 #%%
 if isnotebook():
-    path = Path("../..")
+    path = Path("..")
 else:
     path = Path(".")
-#%% script params
-method = "rff"
-job_id = 2580211#2703849#2580211#2686645#
-param_idx = 1
-sig_thresh = 0.1
-with_pre = False
+#%%
 #compute approximate confidence interval on the rejection rate, by using the
 #following argument:
 # E[r] = q, rhat ~ q; var(rhat) = q(1-q)/N; var(rhat)_hat ~ rhat(1-rhat)/N
@@ -33,33 +28,45 @@ with_pre = False
 #BETTER, just use
 ci95 = 1.96*np.sqrt(0.1*0.9/1000)
 # on the grounds that for N=1000 => CLT, so this is ~95%ci
+sig_thresh = 0.1
+#%% script params
+def import_data(method, job_id, param_idx, with_pre):
 
-# get data
-sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_{param_idx}_{job_id}.csv"))
+    # get data
+    sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_{param_idx}_{job_id}.csv"))
 
-# sort out data
-sweep = sweep.rename({"N":"n"}, axis=1)
-sweep = sweep.sort_values(by=["n","D","l"])
-# if there are duplicates, average over them
-sweep_grp = sweep.groupby(sweep.columns.difference(["reject","err"]).tolist())
-sweep = sweep_grp.mean()
-# RIP index
-sweep = sweep.reset_index()
+    # sort out data
+    sweep = sweep.rename({"N":"n"}, axis=1)
+    sweep = sweep.sort_values(by=["n","D","l"])
+    # if there are duplicates, average over them
+    sweep_grp = sweep.groupby(sweep.columns.difference(["reject","err"]).tolist())
+    sweep = sweep_grp.mean()
+    # RIP index
+    sweep = sweep.reset_index()
 
-# only keep 0.1 and 2.0 for now?
-sweep = sweep.query("l in [0.1,1.0]")
+    # only keep 0.1 and 2.0 for now?
+    sweep = sweep.query("l in [0.1,1.0,2.0,5.0]")
 
-if method == "ciq":
-    sweep = sweep.rename({"D":"J"}, axis=1)
-    fidel_param = "J"
-    if with_pre:
-        order_f = lambda n: n**(3/8) * np.log(n)  
+    if method == "ciq":
+        sweep = sweep.rename({"D":"J"}, axis=1)
+        fidel_param = "J"
+        if with_pre:
+            order_f = lambda n: n**(3/8) * np.log(n)  
+        else:
+            order_f = lambda n: np.sqrt(n) * np.log(n)
     else:
-        order_f = lambda n: np.sqrt(n) * np.log(n)
-else:
-    fidel_param = "D"
-    order_f = lambda n: n**(3/2) * np.log(n)
+        fidel_param = "D"
+        order_f = lambda n: n**(3/2) * np.log(n)
 
+    return sweep, order_f, fidel_param
+
+#%% get data
+method = "ciq"
+job_id = 2686645#2703849#2580211#2686645#
+param_idx = 1
+with_pre = True
+chol_sweep, _, _ = import_data("chol", 3057212, 1, None)
+sweep, order_f, fidel_param = import_data(method, job_id, param_idx, with_pre)
 #%% empirically estimate the convergence of r wrt D? e.g. D ~ nlogn or n^2 or
 #... i.e. find the first D for each N s.t. the observed rejection rate is within
 #some small distance (1e-2 for now; arbitrary need fluctuation analysis) of the
@@ -71,10 +78,13 @@ for l in sweep.l.unique():
         avg_r_by_D = grp_df.groupby(fidel_param).reject.mean()
         crossing_Ds[l][idx] = (np.abs(avg_r_by_D - 0.1) > 1e-2).idxmin()
 
+#%% chol summary
+chol_grp = chol_sweep.groupby("l")
+chol_max = chol_grp.reject.max()
+chol_min = chol_grp.reject.min()
+#%% poster plots #1
 import matplotlib.pyplot as plt
 palette = sns.color_palette(palette="flare", n_colors=sweep.n.nunique())
-
-#%% poster plots #1
 
 def conv_plot(df, xlabel, ylabel="reject"):
 
@@ -83,7 +93,7 @@ def conv_plot(df, xlabel, ylabel="reject"):
         data=df,
         x=xlabel, y=ylabel,
         hue="n", col="l",
-        kind="line", palette=palette, col_wrap=2,
+        kind="line", palette=palette, col_wrap=sweep.l.nunique(),
         height=5, aspect=.75, facet_kws=dict(sharex=False),
         )
         ax.set(xscale="log", yscale="log")
@@ -101,17 +111,15 @@ def conv_plot(df, xlabel, ylabel="reject"):
             _ax.patch.set_linewidth('1') 
             _ax.set_xticks(xticks)
             _ax.set_ylim(top=1)
+            _ax.fill_between(range(df.shape[0]), np.tile(chol_max[_l], df.shape[0]), np.tile(chol_min[_l], df.shape[0]), alpha=0.2, color='gray', interpolate=True)
+
+    plt.setp(ax._legend.get_title(), fontsize=30)
 
     fig = plt.gcf()
     title = method.upper()
     if with_pre:
         title = "P" + title
     fig.suptitle(title)
-
-#%%
-conv_plot(sweep, fidel_param)
-save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}", suffix="pdf", show=True, dpi=600, overwrite=True)
-
 
 #%% Repeat plots but re-scale x-axis by sqrt(n)log(n) to reflect scaling
 #expectation
@@ -120,7 +128,7 @@ sweep.loc[:, rescaled_fidel] = sweep.loc[:, fidel_param]/order_f(sweep.n)
 
 #%%
 conv_plot(sweep, rescaled_fidel)
-save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="pdf", show=True, dpi=600, overwrite=True)
+save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="pdf", show=True, dpi=600, overwrite=False)
 #%%
 raise Exception("End script")
 #group by parameter values

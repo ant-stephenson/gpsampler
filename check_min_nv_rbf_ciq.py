@@ -19,18 +19,7 @@ B = lambda d,l: b(l)/A(d,l)
 
 eig = lambda n, d, l, k: n * 2*(a(d)/A(d,l))**(d/2)*B(d,l)**(k-1)
 
-#%% define according to Wathen2015a
-g_1 = lambda d, l: ((d/2)/(d/4 + 1/(2*l**2) + d/4 * np.sqrt(1+4/(d*l**2))))**d
-f = lambda d, l, k: (1+d*l**2*(1+0.5*(np.sqrt(1+4/(d*l**2)) - 1)))**(d-k)
-
-eig2 = lambda n, d, l, k: n * g_1(d,l) * f(d,l,k)
 #%% define function to solve based on expression for J with n -> n*(2a/A)^(d/2)*B
-# func = lambda nv: J -(1 + np.sqrt(n)/nv * (2*a(d)/A(d,l))**(d/4) *
-# np.sqrt(B(d,l)) * (np.log(n)+d/2 * np.log(2*a(d)/A(d,l)) +
-# np.log(B(d,l))-np.log(2*nv*delta) +np.log(np.log(n))))
-# NOTE: Here nv = sqrt(nv) actually, but below nv=nv
-Jfun_old = lambda nv: (1 + np.sqrt(n/eta)/nv * (2*a(d)/A(d,l))**(d/4) * np.sqrt(B(d,l)) * (np.log(n)+d/2 * np.log(2*a(d)/A(d,l)) + np.log(B(d,l))-np.log(np.sqrt(2*(1-eta))*np.sqrt(nv)*delta) +0.5*np.log(np.log(n)) - 0.5*np.log(nv*(1-eta))/4-np.log(np.pi) + np.log(np.log(5)+0.5*np.log(n)-0.5*np.log(nv*(1-eta)))))
-
 C = 10
 deltaQ = lambda nv: delta * np.sqrt(nv*(1-eta))/2
 cond = lambda n, d, l, nv: eig(n,d,l,1)/(eta*nv)+1
@@ -67,12 +56,9 @@ print(n_min)
 fun3 = lambda logn: 3/4 * logn - np.sqrt(np.exp(logn)) * (1-B(d,l)) - np.log(mineig(logn)/4)
 np.exp(fsolve(fun3, np.log(1000)))
 # %% test preconditioning at large l
-from gpytools.maths import incomplete_chol_kernel_inv, partial_svd_inv, inv, id_inv
+from gpytools.maths import id_inv
 from gpybench.datasets import sample_rbf_kernel
-import scipy.linalg.interpolative as sli
 
-
-#%%
 d = 10
 ms = np.arange(250,2000,250)
 ls = np.asarray([1e-2,1e-1,1,2])

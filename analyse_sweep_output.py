@@ -2,13 +2,10 @@
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from gpybench.plotting import save_fig, LaTeX, ribbonplot
+from gpybench.plotting import save_fig, LaTeX
 from gpybench.utils import isnotebook
 from gpytools.utils import ordermag
-from nptyping import NDArray
 from pathlib import Path
-
-from typing import Annotated, Final
  
 #%%
 if isnotebook():
@@ -16,16 +13,6 @@ if isnotebook():
 else:
     path = Path(".")
 #%%
-#compute approximate confidence interval on the rejection rate, by using the
-#following argument:
-# E[r] = q, rhat ~ q; var(rhat) = q(1-q)/N; var(rhat)_hat ~ rhat(1-rhat)/N
-# q = 1/2*(alpha + (1-beta)), rhat = 1/2(alpha + (1-betahat))
-# betahat = 1 - 2rhat + alpha
-# varrhat = rhat(betahat-alpha)/N = rhat(1-2rhat)/N
-# assume N = 1000 (check file)
-# sweep.loc[:, "rsigma"] = 2 * np.sqrt(sweep.reject * (1-sweep.reject) / 1000)
-
-#BETTER, just use
 ci95 = 1.96*np.sqrt(0.1*0.9/1000)
 # on the grounds that for N=1000 => CLT, so this is ~95%ci
 sig_thresh = 0.1
@@ -45,7 +32,7 @@ def import_data(method, job_id, param_idx, with_pre):
     sweep = sweep.reset_index()
 
     # only keep 0.1 and 2.0 for now?
-    sweep = sweep.query("l in [0.1,1.0,2.0,5.0]")
+    sweep = sweep.query("l in [0.1,1.0]")#,2.0,5.0]")
 
     if method == "ciq":
         sweep = sweep.rename({"D":"J"}, axis=1)
@@ -61,10 +48,10 @@ def import_data(method, job_id, param_idx, with_pre):
     return sweep, order_f, fidel_param
 
 #%% get data
-method = "ciq"
-job_id = 2686645#2703849#2580211#2686645#
+method = "rff"
+job_id = 2580211#2703849#2580211#2686645#
 param_idx = 1
-with_pre = True
+with_pre = False
 chol_sweep, _, _ = import_data("chol", 3057212, 1, None)
 sweep, order_f, fidel_param = import_data(method, job_id, param_idx, with_pre)
 #%% empirically estimate the convergence of r wrt D? e.g. D ~ nlogn or n^2 or
@@ -113,7 +100,12 @@ def conv_plot(df, xlabel, ylabel="reject"):
             _ax.set_ylim(top=1)
             _ax.fill_between(range(df.shape[0]), np.tile(chol_max[_l], df.shape[0]), np.tile(chol_min[_l], df.shape[0]), alpha=0.2, color='gray', interpolate=True)
 
+    # normal
     plt.setp(ax._legend.get_title(), fontsize=30)
+    # for thumbnail:
+        # leg = ax._legend
+        # leg.set_bbox_to_anchor([0.65, 1.0])  # coordinates of lower left of bounding box
+        # leg._loc = 2
 
     fig = plt.gcf()
     title = method.upper()
@@ -128,50 +120,7 @@ sweep.loc[:, rescaled_fidel] = sweep.loc[:, fidel_param]/order_f(sweep.n)
 
 #%%
 conv_plot(sweep, rescaled_fidel)
-save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="pdf", show=True, dpi=600, overwrite=False)
-#%%
-raise Exception("End script")
-#group by parameter values
-# sweep_grp = sweep.groupby(["d", "l", "sigma", "noise_var"])
-
-# grp = list(sweep_grp.groups.keys())[0]
-# title = [f"{k}:{v}" for k,v in zip(sweep_grp.keys, grp)]
-#%% - plot error as function of no. RFF (logscales). err = ||K-Krff||_F
-# ax1 = sns.lineplot(x="D", y="err", data=sweep, hue="N")
-# ax1.set(xscale="log", yscale="log")
-# ax1.set_title(title)
-# save_fig(path, f"logerr-logD_byN_{method}", suffix="jpg", show=True)
-# %- plot err vs reject (for particular value of l for now)
-ax3 = sns.lineplot(x="err", y="reject", hue="N", marker="D", data=sweep_sub)
-ax3.set(xscale="log", yscale="log")
-save_fig(path, f"logreject-logerr_byN_{method}", suffix="jpg", show=True)
-#% not actually 1...want a placeholder as we want to just state that the
-#function is shape-preserving
-M: int = 1 #!
-N: int = 1
-def transform_cols(df: NDArray[(M,N)], transforms: dict) -> NDArray[(M,N)]:
-    """Transforms a subset of columns of dataframe according to usual df.transform syntax
-    i.e. dict, whilst retaining the other columns by transforming them according to an identity function
-
-    Returns:
-        pd.DataFrame: ...
-    """
-    id = lambda x: x
-    _transforms = {**{k:id for k in df.columns}, **transforms}
-    return df.transform(_transforms)
-# % fit linear reg. models: log(reject) ~ log(D | N)
-transforms = {"reject": np.log}
-ax4 = sns.lmplot(x=fidel_param, y="reject", data=transform_cols(sweep, transforms), col="N", logx=True, col_wrap=3)
-ax4.set(xscale="log")
-save_fig(path, f"logreject-logD_byN_reg_{method}", suffix="jpg", show=True)
-# % fit linear reg. models: log(err) ~ log(D | N)
-transforms = {"err": np.log}
-ax5 = sns.lmplot(x=fidel_param, y="err", data=transform_cols(sweep, transforms), col="N", logx=True, col_wrap=3)
-ax5.set(xscale="log")
-save_fig(path, f"logerr-logD_byN_reg_{method}", suffix="jpg", show=True)
-# % fit linear reg. models: log(reject) ~ log(err | N)
-transforms = {"reject": np.log}
-ax6 = sns.lmplot(x="err", y="reject", data=transform_cols(sweep, transforms), col="N", logx=True, col_wrap=3)
-ax6.set(xscale="log")
-save_fig(path, f"logreject-logerr_byN_reg_{method}", suffix="jpg", show=True)
-# %%
+save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="pdf", show=True, dpi=600, overwrite=True)
+# with Thumbnail() as _:
+#     conv_plot(sweep, rescaled_fidel)
+#     save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="png", show=True, dpi=600, size_inches=(2.66667, 2.13333), overwrite=True)

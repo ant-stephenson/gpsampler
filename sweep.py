@@ -5,7 +5,7 @@ from typing import Tuple, TextIO, Iterable
 from scipy import linalg, stats
 from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
-from gpybench.utils import check_exists
+from gpsampler.utils import check_exists
 import pathlib
 
 import gpsampler

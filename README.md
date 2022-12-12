@@ -3,3 +3,6 @@ This module includes code to generate samples from a Gaussian Process using eith
 
 ## GPyTorch Settings
 Note that in the function ``sample_ciq_from_x`` we manually set various GPyTorch settings to ensure that iterative methods (such as CG) run to the requested number of maximum iterations, rather than terminating early due to inbuilt settings of the software.
+
+## Note
+This is incomplete and some files (with prefix ``test_``) use functions not currently available in the package. We intend to fix this soon, though these functions are not required to run the data-generation functions themselves.

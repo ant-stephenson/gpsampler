@@ -5,7 +5,8 @@ from scipy.special import ellipk, ellipj
 import torch
 import gpytorch
 # from gpytorch.utils import contour_integral_quad
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
+from nptyping import NDArray, Shape, Float
 from contextlib import ExitStack
 import warnings
 
@@ -27,22 +28,27 @@ T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available(
 
 torch.set_default_tensor_type(T_TYPE)
 
+NPInputVec = NDArray[Shape["P,1"], Float]
+NPInputMat = NDArray[Shape["N,P"], Float]
+NPSample = NDArray[Shape["N,1"], Float]
+NPKernel = NDArray[Shape["N,N"], Float]
 
-def k_true(sigma, l, xp, xq): return sigma * \
+
+def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float: return sigma * \
     np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
-def z(omega, D, x): return np.sqrt(2/D)*np.ravel(np.column_stack(
+def zrf(omega: NDArray[Shape["D, P"], Float], D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"], Float]: return np.sqrt(2/D)*np.ravel(np.column_stack(
     (np.cos(np.dot(omega, x)), np.sin(np.dot(omega, x)))))  # random features
 
 
-def f(omega, D, w, x): return np.sum(w*z(omega, D, x))  # GP approximation
+def f_rf(omega: NDArray[Shape["D, P"], Float], D: int, w: NDArray[Shape["2 x n_rff"], Float], x: NPInputVec) -> float: return np.sum(w*zrf(omega, D, x))  # GP approximation
 
 
 def estimate_rff_kernel(
-        X: np.ndarray, D: int, ks: float, l: float) -> np.ndarray:
+        X: NPInputMat, D: int, ks: float, l: float) -> NPKernel:
     N, d = X.shape
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
-    Z = np.array([z(omega, D, xx) for xx in X])*np.sqrt(ks)
+    Z = np.array([zrf(omega, D, xx) for xx in X])*np.sqrt(ks)
     approx_cov = np.inner(Z, Z)
     return approx_cov
 
@@ -109,11 +115,9 @@ def matsqrt(X, J, Q, reg=1e-6):
     return S
 
 
-def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
+def estimate_ciq_kernel(X: NPInputMat, J: int, Q: int, ks: float, l: float, nv=None) -> NPKernel:
     kernel = construct_kernels(l, ks)
     n, d = X.shape
-    J = int(np.sqrt(n) * np.log(n))
-    Q = int(np.log(n))
     K = kernel(torch.tensor(X)).detach().numpy()
     rootK = matsqrt(K, J, Q, nv)
     return np.real(rootK @ rootK)
@@ -122,8 +126,7 @@ def estimate_ciq_kernel(X, J, Q, ks, l, nv=None) -> np.ndarray:
 def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
                       noise_var: float, kernelscale: float, lenscale: float,
                       J: int, Q: int, checkpoint_size: int = 1500,
-                      max_preconditioner_size: int = 0) -> Tuple[np.ndarray, np.
-                                                                 ndarray]:
+                      max_preconditioner_size: int = 0) -> Tuple[NPInputMat, NPSample]:
     """ Generates a data sample from a MVN and a sample from an approximate GP
     using CIQ to approximate K^1/2 b
 
@@ -160,7 +163,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
                       noise_var: float, kernelscale: float, lenscale: float,
-                      D: int) -> Tuple[np.ndarray, np.ndarray]:
+                      D: int) -> Tuple[NPInputMat, NPSample]:
     """ Generates a data sample from a MVN and a sample from an approximate GP using RFF
 
     Args:
@@ -188,9 +191,8 @@ def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     return x, noisy_sample
 
 
-def sample_chol_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
-                       rng: np.random.Generator, L: np.ndarray) -> Tuple[np.ndarray, np.
-                                                                         ndarray]:
+def sample_chol_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
+                       rng: np.random.Generator, L: np.ndarray) -> Tuple[NPSample, NPKernel]:
     n, d = x.shape
     u = rng.standard_normal(n)
     y_noise = L @ u
@@ -198,9 +200,8 @@ def sample_chol_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
     return y_noise, approx_cov
 
 
-def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
-                      rng: np.random.Generator, D: int) -> Tuple[np.ndarray, np.
-                                                                 ndarray]:
+def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
+                      rng: np.random.Generator, D: int) -> Tuple[NPSample, NPKernel]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:
@@ -219,22 +220,22 @@ def sample_rff_from_x(x: np.ndarray, sigma: float, noise_var: float, l: float,
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
 
     w = rng.standard_normal(D)
-    my_f = partial(f, omega, D, w)
+    my_f = partial(f_rf, omega, D, w)
     y = np.array([my_f(xx) for xx in x])*np.sqrt(sigma)
     noise = rng.normal(scale=np.sqrt(noise_var), size=n)
     y_noise = y + noise
 
-    my_z = partial(z, omega, D)
+    my_z = partial(zrf, omega, D)
     Z = np.array([my_z(xx) for xx in x])*np.sqrt(sigma)
     approx_cov = np.inner(Z, Z)
     return y_noise, approx_cov
 
 
 def sample_ciq_from_x(
-        x: np.ndarray, sigma: float, noise_var: float, l: float,
+        x: Union[torch.Tensor, NPInputMat], sigma: float, noise_var: float, l: float,
         rng: np.random.Generator, J: int, Q: Optional[int] = None,
         checkpoint_size: int = 1500, max_preconditioner_size: int = 0) -> Tuple[
-        np.ndarray, np.ndarray]:
+        NPSample, Union[NPKernel, float]]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:

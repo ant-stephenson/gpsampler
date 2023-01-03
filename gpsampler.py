@@ -53,9 +53,9 @@ def estimate_rff_kernel(
     return approx_cov
 
 
-def construct_kernels(l: float, b: float = 1.0) -> gpytorch.kernels.Kernel:
-    # kernel = SparseKernel(gpytorch.kernels.RBFKernel())
-    kernel = gpytorch.kernels.RBFKernel()
+def construct_kernels(l: float, b: float = 1.0, kernel = gpytorch.kernels.RBFKernel(), issparse = False) -> gpytorch.kernels.Kernel:
+    if issparse:
+        kernel = SparseKernel(kernel)
     kernel = gpytorch.kernels.ScaleKernel(kernel)
     n_gpus = torch.cuda.device_count()
     if n_gpus > 1:

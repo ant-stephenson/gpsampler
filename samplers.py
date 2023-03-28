@@ -1,7 +1,9 @@
+from re import I
 import numpy as np
+from numba import jit
 from scipy.special import ellipj, ellipk
+import scipy.linalg as linalg
 from functools import partial
-from scipy.special import ellipk, ellipj
 import torch
 import gpytorch
 # from gpytorch.utils import contour_integral_quad
@@ -33,16 +35,23 @@ NPInputMat = NDArray[Shape["N,P"], Float]
 NPSample = NDArray[Shape["N,1"], Float]
 NPKernel = NDArray[Shape["N,N"], Float]
 
-
+@jit(nopython=True)
 def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float: return sigma * \
     np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
-def zrf(omega: NDArray[Shape["D, P"], Float], D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"], Float]: return np.sqrt(2/D)*np.ravel(np.column_stack(
-    (np.cos(np.dot(omega, x)), np.sin(np.dot(omega, x)))))  # random features
 
+@jit(nopython=True)
+def zrf(omega: NDArray[Shape["D, P"], Float], D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"], Float]:
+    if x.ndim == 1:
+        n = 1
+    else:
+        n = x.shape[0]
+    v = omega @ x.T
+    return np.sqrt(2/D) * np.hstack((np.cos(v.T),np.sin(v.T))).reshape(n,D)
 
+@jit(nopython=True)
 def f_rf(omega: NDArray[Shape["D, P"], Float], D: int, w: NDArray[Shape["2 x n_rff"], Float], x: NPInputVec) -> float: return np.sum(w*zrf(omega, D, x))  # GP approximation
 
-
+@jit(nopython=True)
 def estimate_rff_kernel(
         X: NPInputMat, D: int, ks: float, l: float) -> NPKernel:
     N, d = X.shape
@@ -199,9 +208,90 @@ def sample_chol_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
     approx_cov = L @ L.T
     return y_noise, approx_cov
 
+def sample_cg_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
+                       rng: np.random.Generator, m: int) -> Tuple[NPSample, NPKernel]:
+    from scipy.sparse import diags
+    from gpytools.maths import invmsqrt
+    n,d = x.shape
+    z = rng.standard_normal(n)
+    y0 = np.zeros(n)
+
+    Q = construct_kernels(
+        l, sigma)(
+        torch.as_tensor(x)).add_jitter(
+        1 * noise_var).evaluate().detach().numpy()
+
+    r0 = z - Q @ y0
+
+    beta = np.zeros(m)
+    alpha = np.zeros(m)
+
+    V = np.zeros((n,m))
+
+    beta[0] = linalg.norm(r0)
+    V[:,0] = r0/beta[0]
+
+    e1 = np.concatenate(([1],np.zeros(m-1, dtype=int)))
+
+    for j in range(0, m-1):
+        wj = Q @ V[:,j] - beta[j] * V[:,j-1]
+        alpha[j] = wj.T @ V[:,j]
+        beta[j+1] = linalg.norm(wj)
+        V[:,j+1] = wj/beta[j+1]
+
+    offset = [-1,0,1]
+    # not sure if we should exclude the first or last beta...
+    T = diags([beta[:-1],alpha,beta[:-1]],offset).toarray()
+    y = y0 + beta[0] * V @ invmsqrt(T) @ e1
+    y = Q @ y
+    approx_cov = V @ T @ V.T
+    return y, approx_cov
 
 def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
-                      rng: np.random.Generator, D: int) -> Tuple[NPSample, NPKernel]:
+                      rng: np.random.Generator, D: int, kernel_type: str = "rbf", **kwargs) -> Tuple[NPSample, NPKernel]:
+    """ Generates sample from approximate GP using RFF method at points x
+
+    Args:
+        x (np.ndarray): Nxd matrix of locations
+        sigma (float): outputscale
+        noise_var (float): noise variance
+        l (float): lengthscale
+        rng (Generator): RNG
+        D (int): Number of RFF
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: Approx. GP draw; 1D array of length n and approx cov
+    """
+    if kernel_type == "rbf":
+        return sample_se_rff_from_x(x, sigma, noise_var, l, rng, D)
+    elif kernel_type == "matern":
+        kargs = {**kwargs}
+        G = kargs["G"]
+        nu = kargs["nu"]
+
+        return sample_mat_rff_from_x(x, sigma, noise_var, l, rng, D, G, nu)
+    else:
+        raise NotImplementedError
+
+
+def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float, rng: np.random.Generator, D: int, G: int, nu: float) -> Tuple[NPSample, NPKernel]:
+    n, d = x.shape
+    w = rng.standard_normal((D,1))
+    s = rng.gamma(shape = nu, scale = l**2/nu, size = G)
+    omega = rng.standard_normal((D//2,d,G))
+    y, C = np.zeros(n,), np.zeros((n,n))
+    for i,ss in enumerate(s):
+        ys, Cs = _sample_se_rff_from_x(x, sigma, omega[:,:,i]/np.sqrt(ss), w)
+        y += ys
+        C += Cs
+
+    y /= np.sqrt(G)
+    C /= G
+    noise = rng.normal(scale=np.sqrt(noise_var), size=n)
+    y_noise = y + noise
+    return y_noise, C
+
+def sample_se_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,rng: np.random.Generator, D: int) -> Tuple[NPSample, NPKernel]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:
@@ -219,16 +309,20 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
 
-    w = rng.standard_normal(D)
-    my_f = partial(f_rf, omega, D, w)
-    y = np.array([my_f(xx) for xx in x])*np.sqrt(sigma)
+    w = rng.standard_normal((D,1))
+
+    y, approx_cov = _sample_se_rff_from_x(x, sigma, omega, w)
     noise = rng.normal(scale=np.sqrt(noise_var), size=n)
     y_noise = y + noise
-
-    my_z = partial(zrf, omega, D)
-    Z = np.array([my_z(xx) for xx in x])*np.sqrt(sigma)
-    approx_cov = np.inner(Z, Z)
     return y_noise, approx_cov
+
+# @jit(nopython=True)
+def _sample_se_rff_from_x(x: NPInputMat, sigma: float, omega: NDArray[Shape["N,D"], Float], w: NDArray[Shape["D,1"], Float]) -> Tuple[NPSample, NPKernel]:
+    D = w.shape[0]
+    Z = zrf(omega, D, x)*np.sqrt(sigma)
+    approx_cov = np.inner(Z, Z)
+    y = (Z @ w).flatten()
+    return y, approx_cov
 
 
 def sample_ciq_from_x(
@@ -566,9 +660,9 @@ lenscale %.2f
         )
     )
 
-    x, sample = generate_ciq_data(
-        N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
-    # x, sample = generate_rff_data(N, xmean, xcov_diag, noise_var, sigma, l, D)
+    # x, sample = generate_ciq_data(
+        # N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
+    x, sample = generate_rff_data(N, xmean, xcov_diag, noise_var, sigma, l, D)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)
     # np.savetxt("noisy_sample.out.gz", noisy_sample)

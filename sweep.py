@@ -118,16 +118,19 @@ def sweep_fun(
 
     if method == "rff":
         _Ds = Ds
-        sampling_function = gpsampler.sample_rff_from_x
+        sampling_function = gpsampler.samplers.sample_rff_from_x
     elif method == "ciq":
         _Ds = Js
         sampling_function = partial(
-            gpsampler.sample_ciq_from_x,
+            gpsampler.samplers.sample_ciq_from_x,
             Q=int(np.log(N)),
             max_preconditioner_size=max_preconditioner_size)
     elif method == "chol":
         _Ds = lambda *args: [L]
-        sampling_function = gpsampler.sample_chol_from_x
+        sampling_function = gpsampler.samplers.sample_chol_from_x
+    elif method == "cg":
+        _Ds = lambda *args: [2**i for i in range(4, int(np.log2(np.sqrt(args[-1])))+1)]
+        sampling_function = gpsampler.samplers.sample_cg_from_x
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 
@@ -236,4 +239,4 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
 
 
 if __name__ == "__main__":
-    run_sweep(**default_param_set, method="chol")  # type: ignore
+    run_sweep(**default_param_set, method="cg")  # type: ignore

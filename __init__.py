@@ -1,4 +1,4 @@
-from .gpsampler import construct_kernels, generate_ciq_data, generate_rff_data
+from .samplers import construct_kernels, generate_ciq_data, generate_rff_data, sample_ciq_from_x, sample_rff_from_x, sample_chol_from_x
 
 """ 
 Install with `pip install -e .`

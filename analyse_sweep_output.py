@@ -6,6 +6,7 @@ from gpybench.plotting import save_fig, LaTeX
 from gpybench.utils import isnotebook
 from gpytools.utils import ordermag
 from pathlib import Path
+import warnings
  
 #%%
 if isnotebook():
@@ -19,8 +20,9 @@ sig_thresh = 0.1
 #%% script params
 def import_data(method, job_id, param_idx, with_pre):
 
+    expt_path = path.parent.absolute().parent.joinpath("experiments")
     # get data
-    sweep = pd.read_csv(path.joinpath(f"output_sweep_{method}_{param_idx}_{job_id}.csv"))
+    sweep = pd.read_csv(expt_path.joinpath(f"output_sweep_{method}_{param_idx}_{job_id}.csv"))
 
     # sort out data
     sweep = sweep.rename({"N":"n"}, axis=1)
@@ -32,7 +34,7 @@ def import_data(method, job_id, param_idx, with_pre):
     sweep = sweep.reset_index()
 
     # only keep 0.1 and 2.0 for now?
-    sweep = sweep.query("l in [0.1,1.0]")#,2.0,5.0]")
+    # sweep = sweep.query("l in [0.1,1.0,2.0,5.0]")
 
     if method == "ciq":
         sweep = sweep.rename({"D":"J"}, axis=1)
@@ -48,8 +50,8 @@ def import_data(method, job_id, param_idx, with_pre):
     return sweep, order_f, fidel_param
 
 #%% get data
-method = "rff"
-job_id = 2580211#2703849#2580211#2686645#
+method = "ciq"
+job_id = 2703849#2580211#2703849#2580211#2686645#
 param_idx = 1
 with_pre = False
 chol_sweep, _, _ = import_data("chol", 3057212, 1, None)
@@ -98,7 +100,10 @@ def conv_plot(df, xlabel, ylabel="reject"):
             _ax.patch.set_linewidth('1') 
             _ax.set_xticks(xticks)
             _ax.set_ylim(top=1)
-            _ax.fill_between(range(df.shape[0]), np.tile(chol_max[_l], df.shape[0]), np.tile(chol_min[_l], df.shape[0]), alpha=0.2, color='gray', interpolate=True)
+            try:
+                _ax.fill_between(range(df.shape[0]), np.tile(chol_max[_l], df.shape[0]), np.tile(chol_min[_l], df.shape[0]), alpha=0.2, color='gray', interpolate=True)
+            except KeyError as ke:
+                warnings.warn(str(ke))
 
     # normal
     plt.setp(ax._legend.get_title(), fontsize=30)
@@ -124,3 +129,4 @@ save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suf
 # with Thumbnail() as _:
 #     conv_plot(sweep, rescaled_fidel)
 #     save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="png", show=True, dpi=600, size_inches=(2.66667, 2.13333), overwrite=True)
+# %%

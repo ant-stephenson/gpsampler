@@ -316,11 +316,11 @@ def sample_se_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float
     y_noise = y + noise
     return y_noise, approx_cov
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def _sample_se_rff_from_x(x: NPInputMat, sigma: float, omega: NDArray[Shape["N,D"], Float], w: NDArray[Shape["D,1"], Float]) -> Tuple[NPSample, NPKernel]:
     D = w.shape[0]
     Z = zrf(omega, D, x)*np.sqrt(sigma)
-    approx_cov = np.inner(Z, Z)
+    approx_cov = Z @ Z.T
     y = (Z @ w).flatten()
     return y, approx_cov
 

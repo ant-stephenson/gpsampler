@@ -172,7 +172,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
 
 def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
                       noise_var: float, kernelscale: float, lenscale: float,
-                      D: int) -> Tuple[NPInputMat, NPSample]:
+                      D: int, kernel_type: str = "rbf", **kwargs) -> Tuple[NPInputMat, NPSample]:
     """ Generates a data sample from a MVN and a sample from an approximate GP using RFF
 
     Args:
@@ -196,7 +196,7 @@ def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     x = rng.multivariate_normal(xmean, xcov, n)
 
     noisy_sample, approx_cov = sample_rff_from_x(
-        x, kernelscale, noise_var, lenscale, rng, D)
+        x, kernelscale, noise_var, lenscale, rng, D, kernel_type ,**kwargs)
     return x, noisy_sample
 
 
@@ -316,11 +316,11 @@ def sample_se_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float
     y_noise = y + noise
     return y_noise, approx_cov
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def _sample_se_rff_from_x(x: NPInputMat, sigma: float, omega: NDArray[Shape["N,D"], Float], w: NDArray[Shape["D,1"], Float]) -> Tuple[NPSample, NPKernel]:
     D = w.shape[0]
     Z = zrf(omega, D, x)*np.sqrt(sigma)
-    approx_cov = np.inner(Z, Z)
+    approx_cov = Z @ Z.T
     y = (Z @ w).flatten()
     return y, approx_cov
 

@@ -16,7 +16,11 @@ from gpsampler.samplers import sample_rff_from_x, zrf, estimate_rff_kernel
 
 from gpsampler.tests.utils import *
 
+
+D = int(n**2 * np.log(n)//2 * 2)
+
 class TestRFF:
+    # Note that kernel errors ||K-Khat|| ~ sum_ij |E_ij|^2 ~ n^2/D ≤ 1
     def test_zrf(self):
         pass
 

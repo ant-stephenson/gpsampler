@@ -2,6 +2,7 @@ import pytest
 from pytest import MonkeyPatch
 from unittest.mock import patch, MagicMock
 from pytest_mock import mocker
+from hypothesis import given, strategies as st
 import numpy as np
 from gpybench.datasets import sample_with_correlation
 from gpybench.utils import temp_seed
@@ -9,22 +10,34 @@ from gpybench.utils import temp_seed
 import gpytools.maths as gm
 import gpytorch
 import torch
-import numpy as np
+from itertools import product as cartesian_prod
 
 
-n = 200
-ls = 0.5
-ks = 1.0
-d = 1
-nv = 1e-2
+# n = 200
+# d = 50
+# ls = 3.0
+# nv = 0.008
+# ks = 1-nv
+
+n = 100
+# all_ds = [1,5,10]
+# all_ls = [0.5, 3.0]
+d = 5
+ls =0.5
+nv = 0.008
+ks = 1-nv
+
+
+# pytestmark = pytest.mark.parametrize("d,ls", list(cartesian_prod([n],all_ds,all_ls,[nv],[ks])))
 
 rng = np.random.default_rng(1)
-
-D = int(n**2)
 
 def mse(y0, y1):
     # if y0.shape != y1.shape:
     return np.sqrt(np.sum((y1.flatten()-y0.flatten())**2)/n)
+
+def am(m):
+    return ks**m*(1+2*m/(d*ls**2))**(-d/2)
 
 @pytest.fixture
 def X():

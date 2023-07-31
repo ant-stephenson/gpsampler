@@ -23,7 +23,8 @@ rng = np.random.default_rng(1)
 D = int(n**2)
 
 def mse(y0, y1):
-    return np.sqrt(np.sum((y1-y0)**2)/n)
+    # if y0.shape != y1.shape:
+    return np.sqrt(np.sum((y1.flatten()-y0.flatten())**2)/n)
 
 @pytest.fixture
 def X():

@@ -16,43 +16,6 @@ from gpsampler.samplers import sample_rff_from_x, zrf, estimate_rff_kernel
 
 from gpsampler.tests.utils import *
 
-# n = 200
-# ls = 0.5
-# ks = 1.0
-# d = 1
-# nv = 1e-2
-
-# rng = np.random.default_rng(1)
-
-# D = int(n**2)
-
-# @pytest.fixture
-# def X():
-#     return rng.standard_normal((n,d))/np.sqrt(d)
-
-# @pytest.fixture
-# def K(X):
-#     kernel = gpytorch.kernels.RBFKernel()
-#     kernel.lengthscale = ls
-#     kernel = gpytorch.kernels.ScaleKernel(kernel)
-#     kernel.outputscale = ks
-
-#     K = kernel(torch.as_tensor(X)).add_jitter(nv)
-#     return K.evaluate().detach().numpy()
-
-@pytest.fixture
-def mocked_rng():
-    w = rng.standard_normal((D,1))
-    cov_omega = np.eye(d)/ls**2
-    omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
-    noise = rng.normal(scale=np.sqrt(nv),size=n)
-
-    mocked_rng = MagicMock()
-    mocked_rng.standard_normal.return_value = w
-    mocked_rng.multivariate_normal.return_value = omega
-    mocked_rng.normal.return_value = noise
-    return mocked_rng
-
 class TestRFF:
     def test_zrf(self):
         pass
@@ -73,11 +36,11 @@ class TestRFF:
             mock_zrf.return_value = Z
             f1,C1 = sample_rff_from_x(X, ks, nv, ls, mocked_rng, D)
         # transform w to u to make comparable
-        f0 = gm.msqrt(K) @ gm.invmsqrt(C1) @ Z @ w
+        f0 = (gm.msqrt(K) @ gm.invmsqrt(C1) @ Z @ w).flatten()
         err = mse(f0,f1)
         Kerr = np.linalg.norm(K - C1)
-        np.testing.assert_array_less(err,benchmarks)
         assert Kerr < 1.0
+        np.testing.assert_array_less(err,benchmarks, verbose=True)
 
     def test_Krff(self, X, K):
         Krff = estimate_rff_kernel(X, D, ks, ls)

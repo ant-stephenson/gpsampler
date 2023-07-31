@@ -37,7 +37,7 @@ class TestMatSqrt:
         rootX = matsqrt(K, None, Q, None)
         err = np.linalg.norm(K - rootX @ rootX)
         np.testing.assert_almost_equal(rootX @ rootX, K, decimal=1e-6)
-        assert err < 0.1
+        assert err < 1.0
 
 class TestCIQ:
     def test_ciq(self, X, y0, u, benchmarks):

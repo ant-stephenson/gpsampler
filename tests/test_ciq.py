@@ -44,6 +44,7 @@ class TestCIQ:
         # EVarHat(y) ~= Var(y) + a - 2a
         approx_margin = np.sqrt((ks+nv)/n)
         Evar = (ks+nv) - am(1)
+        assert np.abs(y1.mean()) < approx_margin
         assert np.abs(y1.var() - Evar) < 2*approx_margin
 
 if __name__ == "__main__":

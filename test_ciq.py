@@ -12,14 +12,14 @@ from pathlib import Path
 from contextlib import ExitStack
 import warnings
 
-import gpsampler
+from gpsampler.samplers import contour_integral_quad
 
 #%%
 n = 2000
-ls = 1.0
+ls = 0.5
 ks = 1.0
-d = 1
-nv = 1e-6
+d = 10
+nv = 1e-4
 #%%
 X = torch.randn((n,d))/torch.sqrt(torch.as_tensor(d))
 kernel = gpytorch.kernels.RBFKernel()
@@ -34,8 +34,8 @@ u = torch.randn((n,1))
 f0 = gm.msqrt(K.evaluate().detach().numpy()) @ u.detach().numpy()
 
 #%%
-max_J = int(np.log2(n))
-Js = [2**i for i in range(max_J)]
+max_J = int(np.sqrt(n)*np.log2(n))
+Js = [max_J]#[2**i for i in range(max_J)]
 J = 1000#int(np.log(n)*np.sqrt(n))
 Q = int(np.log(n))
 # K.preconditioner_override = gpsampler.ID_Preconditioner
@@ -55,7 +55,7 @@ with warnings.catch_warnings():
                 min_preconditioning_size = stack.enter_context(
                     gpytorch.settings.min_preconditioning_size(10))
                 minres_tol = stack.enter_context(gpytorch.settings.minres_tolerance(1e-10))
-                solves, weights, _, _ = gpsampler.contour_integral_quad(
+                solves, weights, _, _ = contour_integral_quad(
                             K,
                             u,
                             max_lanczos_iter=J, num_contour_quadrature=Q)
@@ -63,3 +63,4 @@ with warnings.catch_warnings():
 
             err[j,i] = np.sqrt(np.sum((f.detach().numpy()-f0)**2)/n)
 # %%
+print(err)

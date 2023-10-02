@@ -39,7 +39,7 @@ NPKernel = NDArray[Shape["N,N"], Float]
 def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float: return sigma * \
     np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def zrf(omega: NDArray[Shape["D, P"], Float], D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"], Float]:
     if x.ndim == 1:
         n = 1
@@ -51,13 +51,13 @@ def zrf(omega: NDArray[Shape["D, P"], Float], D: int, x: NPInputVec) -> NDArray[
 @jit(nopython=True)
 def f_rf(omega: NDArray[Shape["D, P"], Float], D: int, w: NDArray[Shape["2 x n_rff"], Float], x: NPInputVec) -> float: return np.sum(w*zrf(omega, D, x))  # GP approximation
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def estimate_rff_kernel(
         X: NPInputMat, D: int, ks: float, l: float) -> NPKernel:
     N, d = X.shape
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
-    Z = np.array([zrf(omega, D, xx) for xx in X])*np.sqrt(ks)
+    Z = zrf(omega, D, X)*np.sqrt(ks)
     approx_cov = np.inner(Z, Z)
     return approx_cov
 
@@ -316,7 +316,7 @@ def sample_se_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float
     y_noise = y + noise
     return y_noise, approx_cov
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def _sample_se_rff_from_x(x: NPInputMat, sigma: float, omega: NDArray[Shape["N,D"], Float], w: NDArray[Shape["D,1"], Float]) -> Tuple[NPSample, NPKernel]:
     D = w.shape[0]
     Z = zrf(omega, D, x)*np.sqrt(sigma)

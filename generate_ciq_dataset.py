@@ -16,6 +16,7 @@ if __name__ == "__main__":
     parser.add_argument("--lengthscale", type=float, default=1.0)
     parser.add_argument("--outputscale", type=float, default=1.0)
     parser.add_argument("--noise_variance", type=float, default=0.1)
+    parser.add_argument("--kernel_type", type=str, default='exp')
     parser.add_argument("--dimension", type=int, default=10)
     parser.add_argument("--out", type=str, default="data.npy")
 
@@ -32,7 +33,8 @@ if __name__ == "__main__":
     lengthscale = np.array(args.lengthscale, dtype=np.float64).item()
     outputscale = np.array(args.outputscale, dtype=np.float64).item()
     noise_variance = np.array(args.noise_variance, dtype=np.float64).item()
+    kernel_type = args.kernel_type
     x, y = generate_ciq_data(args.n, mean, covs, noise_variance, outputscale,
-                             lengthscale, iterations, quadrature_points, checkpoint_size=CHECKPOINT_SIZE)
+                             lengthscale, kernel_type, iterations, quadrature_points, checkpoint_size=CHECKPOINT_SIZE)
     data = np.hstack([x, y.reshape((-1, 1))])
     np.save(args.out, data)

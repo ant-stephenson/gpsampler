@@ -133,7 +133,7 @@ def estimate_ciq_kernel(X: NPInputMat, J: int, Q: int, ks: float, l: float, nv=N
 
 
 def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
-                      noise_var: float, kernelscale: float, lenscale: float,
+                      noise_var: float, kernelscale: float, lenscale: float, kernel_type: str,
                       J: int, Q: int, checkpoint_size: int = 1500,
                       max_preconditioner_size: int = 0) -> Tuple[NPInputMat, NPSample]:
     """ Generates a data sample from a MVN and a sample from an approximate GP
@@ -164,7 +164,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     x = torch.randn(n, input_dim) * cov_diag + mean
 
     sample, approx_cov = sample_ciq_from_x(
-        x, kernelscale, noise_var, lenscale, rng, J, Q,
+        x, kernelscale, noise_var, lenscale, kernel_type, rng, J, Q,
         checkpoint_size, max_preconditioner_size)
 
     return x.cpu().numpy(), sample
@@ -326,7 +326,7 @@ def _sample_se_rff_from_x(x: NPInputMat, sigma: float, omega: NDArray[Shape["N,D
 
 
 def sample_ciq_from_x(
-        x: Union[torch.Tensor, NPInputMat], sigma: float, noise_var: float, l: float,
+        x: Union[torch.Tensor, NPInputMat], sigma: float, noise_var: float, l: float, kernel_type: str,
         rng: np.random.Generator, J: int, Q: Optional[int] = None,
         checkpoint_size: int = 1500, max_preconditioner_size: int = 0) -> Tuple[
         NPSample, Union[NPKernel, float]]:
@@ -348,8 +348,19 @@ def sample_ciq_from_x(
 
     eta = 0.8
 
+    if kernel_type.lower() == 'rbf':
+        base_kernel = gpytorch.kernels.RBFKernel()
+    elif kernel_type.lower() == 'exp':
+        base_kernel = gpytorch.kernels.MaternKernel(0.5)
+    elif kernel_type.lower() == 'matern32':
+        base_kernel = gpytorch.kernels.MaternKernel(1.5)
+    elif kernel_type.lower() == 'matern52':
+        base_kernel = gpytorch.kernels.MaternKernel(2.5)
+    else:
+        raise ValueError("Unsupported kernel or incorrect name. Options: 'rbf', 'exp', 'matern32', 'matern52'.")
+
     kernel = construct_kernels(
-        l, sigma)(
+        l, sigma, base_kernel)(
         torch.as_tensor(x)).add_jitter(
         eta * noise_var)
     kernel.preconditioner_override = ID_Preconditioner

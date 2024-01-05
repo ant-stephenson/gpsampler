@@ -361,8 +361,7 @@ def sample_ciq_from_x(
 
     kernel = construct_kernels(
         l, sigma, base_kernel)(
-        torch.as_tensor(x)).add_jitter(
-        eta * noise_var)
+        torch.as_tensor(x)).add_diag(torch.as_tensor(eta*noise_var))
     kernel.preconditioner_override = ID_Preconditioner
 
     # not sure why I need this yet but...

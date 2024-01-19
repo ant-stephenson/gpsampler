@@ -3,6 +3,7 @@ import re
 import numpy as np
 from functools import singledispatch
 from typing import Tuple
+from scipy.special import gamma, binom
 
 
 @singledispatch
@@ -53,3 +54,64 @@ def rescale_dataset_noise(data: np.ndarray, new_nv: float, rng: np.random.Genera
     y1 = np.sqrt(1-eta) * data[:, -1] + np.sign(eta) * xi
     data[:, -1] = y1
     return data
+
+def compute_rbf_eigenvalue_gpml(n: int, d: int, l: float, k: int) -> float:
+    """Computes the k^th eigenvalue of an RBF Gram matrix with N(0,1/dI_d)
+    x-data. Uses GPML (4.41) p98 
+
+    Args:
+        n (int): Dataset size
+        d (int): Input dimension
+        l (float): lengthscale
+        k (int): eigenvalue-index
+
+    Returns:
+        float: the eigenvalue
+    """
+    a = lambda d: d/(4)
+    b = lambda l: 1/(2*l**2)
+    c = lambda d, l: np.sqrt(a(d)**2 + 2*a(d)*b(l))
+    A = lambda d, l: a(d) + b(l) + c(d,l)
+    B = lambda d,l: b(l)/A(d,l)
+
+    return n * (2*a(d)/A(d,l))**(d/2)*B(d,l)**(k-1)
+
+def compute_rbf_eigenvalue(n: int, d: int, l: float, k: int) -> float:
+    """Computes the k^th eigenvalue of an RBF Gram matrix with N(0,1/dI_d)
+    x-data. Uses GPML (4.41) p98 
+
+    Args:
+        n (int): Dataset size
+        d (int): Input dimension
+        l (float): lengthscale
+        k (int): eigenvalue-index
+
+    Returns:
+        float: the eigenvalue
+    """
+    alphasq = d/2
+    epssq = 1/(2*l**2)
+    deltasq = alphasq/2 * (np.sqrt(1+4*epssq/alphasq)-1)
+    term1 = (alphasq / (alphasq + deltasq + epssq))**d
+    term2 = (1+deltasq/epssq + alphasq/epssq)**(d-k)
+
+    return n * term1 * term2
+
+def compute_sqrtnth_rbf_eigval(n: int, d: int, l: float) -> float:
+    k = int(((np.sqrt(n)+1) * gamma(d+1))**(1/d))-1
+    return compute_rbf_eigenvalue_gpml(n, d, l, k)
+
+def compute_exp_eigenvalue(n: int, d: int, l: float, k: int) -> float:
+    """Computes the k^th eigenvalue of an Exp Gram matrix with N(0,1/dI_d)
+    x-data. Uses ... 
+
+    Args:
+        n (int): Dataset size
+        d (int): Input dimension
+        l (float): lengthscale
+        k (int): eigenvalue-index
+
+    Returns:
+        float: the eigenvalue
+    """
+    raise NotImplementedError

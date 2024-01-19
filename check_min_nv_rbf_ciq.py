@@ -2,22 +2,24 @@
 import numpy as np
 from scipy.optimize import fsolve, brentq, minimize_scalar, Bounds
 
+from gpsampler.utils import compute_rbf_eigenvalue as eig
+
 #%% define params
-n=1e5
+n=1.1e5
 delta =1e-3
 J=44e3
-l=0.3
+l=0.5
 eta=0.8
 d=10
 
 #%% define functions for computing eigenvalue according to GPML (4.41) p98
-a = lambda d: d/(4)
-b = lambda l: 1/(2*l**2)
-c = lambda d, l: np.sqrt(a(d)**2 + 2*a(d)*b(l))
-A = lambda d, l: a(d) + b(l) + c(d,l)
-B = lambda d,l: b(l)/A(d,l)
+# a = lambda d: d/(4)
+# b = lambda l: 1/(2*l**2)
+# c = lambda d, l: np.sqrt(a(d)**2 + 2*a(d)*b(l))
+# A = lambda d, l: a(d) + b(l) + c(d,l)
+# B = lambda d,l: b(l)/A(d,l)
 
-eig = lambda n, d, l, k: n * 2*(a(d)/A(d,l))**(d/2)*B(d,l)**(k-1)
+# eig = lambda n, d, l, k: n * 2*(a(d)/A(d,l))**(d/2)*B(d,l)**(k-1)
 
 #%% define function to solve based on expression for J with n -> n*(2a/A)^(d/2)*B
 C = 10

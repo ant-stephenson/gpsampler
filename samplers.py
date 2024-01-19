@@ -153,8 +153,7 @@ def generate_ciq_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
                                Otherwise choose largest value that memory allows.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: sampled x values, noise-free
-   sample and noisy GP sample
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: sampled x values, noisy GP sample
     """
     input_dim = xmean.shape[0]
     assert input_dim == xcov_diag.shape[0]
@@ -330,7 +329,7 @@ def sample_ciq_from_x(
         rng: np.random.Generator, J: int, Q: Optional[int] = None,
         checkpoint_size: int = 1500, max_preconditioner_size: int = 0) -> Tuple[
         NPSample, Union[NPKernel, float]]:
-    """ Generates sample from approximate GP using RFF method at points x
+    """ Generates sample from approximate GP using CIQ method at points x
 
     Args:
         x (np.ndarray): Nxd matrix of locations
@@ -341,7 +340,7 @@ def sample_ciq_from_x(
         D (int): Number of RFF
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]: Approx. GP draw; 1D array of length n and approx cov
+        Tuple[np.ndarray, np.ndarray]: Approx. GP draw with noise; 1D array of length n and approx cov
     """
     n, d = x.shape
     u = rng.standard_normal(n)

@@ -1,8 +1,8 @@
 import pytest
 from pytest import MonkeyPatch
 from unittest.mock import patch, MagicMock
-from pytest_mock import mocker
-from hypothesis import given, strategies as st
+# from pytest_mock import mocker
+# from hypothesis import given, strategies as st
 import numpy as np
 from gpybench.datasets import sample_with_correlation
 from gpybench.utils import temp_seed

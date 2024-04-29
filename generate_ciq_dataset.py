@@ -6,7 +6,7 @@ import argparse
 import numpy as np
 
 from gpsampler.samplers import generate_ciq_data
-from gpsampler.utils import compute_sqrtnth_rbf_eigval, compute_exp_eigenvalue
+from gpsampler.utils import compute_rbf_J
 
 MAX_ITERATIONS = 42010 # On a 16GB GPU, we found empirically this is close to the largest feasible value (larger => more memory)
 CHECKPOINT_SIZE = 1500 # Also found empirically on 16GB GPU. Increase if a bigger card is available.
@@ -26,17 +26,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
     mean = np.zeros(args.dimension)
     covs = np.ones(args.dimension) / args.dimension
+    # if args.precond:
+    #     max_preconditioner_size = int(np.sqrt(args.n))
+    #     if args.kernel_type.lower() == 'rbf':
+    #         eigk = compute_sqrtnth_rbf_eigval(args.n, args.dimension, args.lengthscale)
+    #         _iterations = max(1 + int(np.sqrt(eigk) * args.n**(3/8))/np.sqrt(args.eta*args.noise_variance * 5/4 * np.log(args.n)), 100)
+    #     if args.kernel_type.lower() == 'exp':
+    #         eigk = compute_exp_eigenvalue(args.n, args.dimension, args.lengthscale, max_preconditioner_size)
+    #         _iterations = max(1 + int(np.sqrt(eigk) * args.n**(3/8))/np.sqrt(args.noise_variance), 100)
+    # else:
+    #     max_preconditioner_size = 0
+    #     _iterations = int(np.log(args.n) * np.sqrt(args.n) /
+    #     np.sqrt(args.noise_variance))
     if args.precond:
         max_preconditioner_size = int(np.sqrt(args.n))
-        if args.kernel_type.lower() == 'rbf':
-            eigk = compute_sqrtnth_rbf_eigval(args.n, args.dimension, args.lengthscale)
-            _iterations = max(1 + int(np.sqrt(eigk) * args.n**(3/8))/np.sqrt(args.eta*args.noise_variance * 5/4 * np.log(args.n)), 100)
-        if args.kernel_type.lower() == 'exp':
-            eigk = compute_exp_eigenvalue(args.n, args.dimension, args.lengthscale, max_preconditioner_size)
-            _iterations = max(1 + int(np.sqrt(eigk) * args.n**(3/8))/np.sqrt(args.noise_variance), 100)
     else:
         max_preconditioner_size = 0
-        _iterations = int(np.log(args.n) * np.sqrt(args.n) / np.sqrt(args.noise_variance))
+
+    if args.kernel_type.lower() == 'rbf':
+        _iterations = compute_rbf_J(args.n, args.dimension, args.lengthscale, args.noise_variance, eta=args.eta)
+    elif args.kernel_type.lower() == 'exp':
+        raise NotImplementedError
+    else:
+        raise NotImplementedError
     print(f"Requested iterations = {_iterations}.")
     iterations = min(MAX_ITERATIONS, _iterations)
     print(f"Using {iterations} iterations. Using/requested = {iterations/_iterations}")

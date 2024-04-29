@@ -20,7 +20,7 @@ sig_thresh = 0.1
 #%% script params
 def import_data(method, job_id, param_idx, with_pre):
 
-    expt_path = path.parent.absolute().parent.joinpath("experiments")
+    expt_path = path.parent.absolute().joinpath("experiments")
     # get data
     sweep = pd.read_csv(expt_path.joinpath(f"output_sweep_{method}_{param_idx}_{job_id}.csv"))
 
@@ -35,6 +35,7 @@ def import_data(method, job_id, param_idx, with_pre):
 
     # only keep 0.1 and 2.0 for now?
     # sweep = sweep.query("l in [0.1,1.0,2.0,5.0]")
+    nv = sweep.noise_var.unique().item()
 
     if method == "ciq":
         sweep = sweep.rename({"D":"J"}, axis=1)
@@ -45,13 +46,14 @@ def import_data(method, job_id, param_idx, with_pre):
             order_f = lambda n: np.sqrt(n) * np.log(n)
     else:
         fidel_param = "D"
-        order_f = lambda n: n**(3/2) * np.log(n)
+        # order_f = lambda n: n**(3/2) * np.log(n)
+        order_f = lambda n: n / nv
 
     return sweep, order_f, fidel_param
 
 #%% get data
-method = "ciq"
-job_id = 2703849#2580211#2703849#2580211#2686645#
+method = "rff"
+job_id = 2580211#2703849#2580211#2686645#
 param_idx = 1
 with_pre = False
 chol_sweep, _, _ = import_data("chol", 3057212, 1, None)
@@ -97,7 +99,7 @@ def conv_plot(df, xlabel, ylabel="reject"):
             _ax.axhline(sig_thresh - ci95, ls='--', color="green")
             _ax.axvline(1, ls='--', color="black")
             _ax.patch.set_edgecolor('black')  
-            _ax.patch.set_linewidth('1') 
+            _ax.patch.set_linewidth(1) 
             _ax.set_xticks(xticks)
             _ax.set_ylim(top=1)
             try:
@@ -125,7 +127,7 @@ sweep.loc[:, rescaled_fidel] = sweep.loc[:, fidel_param]/order_f(sweep.n)
 
 #%%
 conv_plot(sweep, rescaled_fidel)
-save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="pdf", show=True, dpi=600, overwrite=True)
+# save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="pdf", show=True, dpi=600, overwrite=True)
 # with Thumbnail() as _:
 #     conv_plot(sweep, rescaled_fidel)
 #     save_fig(path, f"logreject-logD_byN_{method}_{param_idx}_{job_id}_rescaled", suffix="png", show=True, dpi=600, size_inches=(2.66667, 2.13333), overwrite=True)

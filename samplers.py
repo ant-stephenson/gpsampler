@@ -4,8 +4,10 @@ from numba import jit
 from scipy.special import ellipj, ellipk
 import scipy.linalg as linalg
 from functools import partial
+from itertools import repeat
 import torch
 import gpytorch
+from joblib import Parallel, delayed
 # from gpytorch.utils import contour_integral_quad
 from typing import Tuple, Optional, Union
 from nptyping import NDArray, Shape, Float
@@ -14,6 +16,7 @@ import warnings
 
 import math
 import warnings
+import copy
 
 import torch
 
@@ -35,21 +38,34 @@ NPInputMat = NDArray[Shape["N,P"], Float]
 NPSample = NDArray[Shape["N,1"], Float]
 NPKernel = NDArray[Shape["N,N"], Float]
 
-@jit(nopython=True)
-def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float: return sigma * \
-    np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
 
 @jit(nopython=True)
-def zrf(omega: NDArray[Shape["D, P"], Float], D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"], Float]:
+def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float:
+    return sigma * np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
+
+
+# @jit(nopython=True)
+def zrf(omega: NDArray[Shape["D, P"],
+                       Float],
+        D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"],
+                                          Float]:
     if x.ndim == 1:
         n = 1
     else:
         n = x.shape[0]
     v = omega @ x.T
-    return np.sqrt(2/D) * np.hstack((np.cos(v.T),np.sin(v.T))).reshape(n,D)
+    return np.sqrt(2/D) * np.hstack((np.cos(v.T), np.sin(v.T))).reshape(-1, 1)
 
-@jit(nopython=True)
-def f_rf(omega: NDArray[Shape["D, P"], Float], D: int, w: NDArray[Shape["2 x n_rff"], Float], x: NPInputVec) -> float: return np.sum(w*zrf(omega, D, x))  # GP approximation
+
+# @jit(nopython=True)
+def f_rf(
+    omega: NDArray[Shape["D, P"],
+                   Float],
+    D: int, w: NDArray[Shape["2 x n_rff"],
+                       Float],
+    x: NPInputVec) -> float: return np.sum(
+    w * zrf(omega, D, x))  # GP approximation
+
 
 @jit(nopython=True)
 def estimate_rff_kernel(
@@ -62,7 +78,9 @@ def estimate_rff_kernel(
     return approx_cov
 
 
-def construct_kernels(l: float, b: float = 1.0, kernel = gpytorch.kernels.RBFKernel(), issparse = False) -> gpytorch.kernels.Kernel:
+def construct_kernels(
+        l: float, b: float = 1.0, kernel=gpytorch.kernels.RBFKernel(),
+        issparse=False) -> gpytorch.kernels.Kernel:
     if issparse:
         kernel = SparseKernel(kernel)
     kernel = gpytorch.kernels.ScaleKernel(kernel)
@@ -124,7 +142,8 @@ def matsqrt(X, J, Q, reg=1e-6):
     return S
 
 
-def estimate_ciq_kernel(X: NPInputMat, J: int, Q: int, ks: float, l: float, nv=None) -> NPKernel:
+def estimate_ciq_kernel(
+        X: NPInputMat, J: int, Q: int, ks: float, l: float, nv=None) -> NPKernel:
     kernel = construct_kernels(l, ks)
     n, d = X.shape
     K = kernel(torch.tensor(X)).detach().numpy()
@@ -196,7 +215,7 @@ def generate_rff_data(n: int, xmean: np.ndarray, xcov_diag: np.ndarray,
     x = rng.multivariate_normal(xmean, xcov, n)
 
     noisy_sample, approx_cov = sample_rff_from_x(
-        x, kernelscale, noise_var, lenscale, rng, D, kernel_type ,**kwargs)
+        x, kernelscale, noise_var, lenscale, rng, D, kernel_type, **kwargs)
     return x, noisy_sample
 
 
@@ -208,11 +227,12 @@ def sample_chol_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
     approx_cov = L @ L.T
     return y_noise, approx_cov
 
+
 def sample_cg_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
-                       rng: np.random.Generator, m: int) -> Tuple[NPSample, NPKernel]:
+                     rng: np.random.Generator, m: int) -> Tuple[NPSample, NPKernel]:
     from scipy.sparse import diags
     from gpytools.maths import invmsqrt
-    n,d = x.shape
+    n, d = x.shape
     z = rng.standard_normal(n)
     y0 = np.zeros(n)
 
@@ -226,29 +246,31 @@ def sample_cg_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
     beta = np.zeros(m)
     alpha = np.zeros(m)
 
-    V = np.zeros((n,m))
+    V = np.zeros((n, m))
 
     beta[0] = linalg.norm(r0)
-    V[:,0] = r0/beta[0]
+    V[:, 0] = r0/beta[0]
 
-    e1 = np.concatenate(([1],np.zeros(m-1, dtype=int)))
+    e1 = np.concatenate(([1], np.zeros(m-1, dtype=int)))
 
     for j in range(0, m-1):
-        wj = Q @ V[:,j] - beta[j] * V[:,j-1]
-        alpha[j] = wj.T @ V[:,j]
+        wj = Q @ V[:, j] - beta[j] * V[:, j-1]
+        alpha[j] = wj.T @ V[:, j]
         beta[j+1] = linalg.norm(wj)
-        V[:,j+1] = wj/beta[j+1]
+        V[:, j+1] = wj/beta[j+1]
 
-    offset = [-1,0,1]
+    offset = [-1, 0, 1]
     # not sure if we should exclude the first or last beta...
-    T = diags([beta[:-1],alpha,beta[:-1]],offset).toarray()
+    T = diags([beta[:-1], alpha, beta[:-1]], offset).toarray()
     y = y0 + beta[0] * V @ invmsqrt(T) @ e1
     y = Q @ y
     approx_cov = V @ T @ V.T
     return y, approx_cov
 
+
 def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
-                      rng: np.random.Generator, D: int, kernel_type: str = "rbf", **kwargs) -> Tuple[NPSample, NPKernel]:
+                      rng: np.random.Generator, D: int, kernel_type: str = "rbf",
+                      **kwargs) -> Tuple[NPSample, NPKernel]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:
@@ -266,7 +288,11 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
         return sample_se_rff_from_x(x, sigma, noise_var, l, rng, D)
     elif kernel_type == "matern":
         kargs = {**kwargs}
-        G = kargs["G"]
+        if "G" in kargs.keys():
+            G = kargs["G"]
+        else:
+            G = int(np.sqrt(D))
+            D = G
         nu = kargs["nu"]
 
         return sample_mat_rff_from_x(x, sigma, noise_var, l, rng, D, G, nu)
@@ -274,14 +300,44 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
         raise NotImplementedError
 
 
-def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float, rng: np.random.Generator, D: int, G: int, nu: float) -> Tuple[NPSample, NPKernel]:
+def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l:
+                          float, rng: np.random.Generator, D: int, G: int,
+                          nu: float) -> Tuple[NPSample, NPKernel]:
     n, d = x.shape
-    w = rng.standard_normal((D,1))
-    s = rng.gamma(shape = nu, scale = l**2/nu, size = G)
-    omega = rng.standard_normal((D//2,d,G))
-    y, C = np.zeros(n,), np.zeros((n,n))
-    for i,ss in enumerate(s):
-        ys, Cs = _sample_se_rff_from_x(x, sigma, omega[:,:,i]/np.sqrt(ss), w)
+    w = rng.standard_normal((D, 1))
+    s = rng.gamma(shape=nu, scale=l**2/nu, size=G)
+    # omega = rng.standard_normal((D//2, d, G))
+    N = int(1e6)
+    y, C = np.zeros(n,), np.nan
+
+    # n_jobs = 4
+
+    # def func(s): return _par_sampler(x, D, s, w, sigma)
+
+    # def worker(func, args_batch):
+    #     y = np.zeros((n, 1))
+    #     for args in args_batch:
+    #         y_new = func(args).reshape(-1, 1)
+    #         np.sum(np.hstack([y, y_new]), axis=1, keepdims=True, out=y)
+
+    #     return y
+    # with Parallel(n_jobs=n_jobs) as parallel:
+    #     funcs = repeat(func, n_jobs)
+    #     s_batches = np.array_split(s, n_jobs, axis=0)
+    #     jobs = zip(funcs, s_batches)
+    #     y = np.sum(parallel(delayed(worker)(*job) for job in jobs), axis=0).flatten()
+
+    for i, ss in enumerate(s):
+        omega = rng.standard_normal((D//2, d))
+        if n > N:
+            ys, Cs = np.zeros(n,), np.nan
+            parts = int(np.ceil(n/N))
+            for p in range(parts):
+                idx = np.s_[(p*N):((p+1)*N)]
+                ys[idx], Cp = _sample_se_rff_from_x(
+                    x[idx, :], sigma, omega[:, :]/np.sqrt(ss), w)
+        else:
+            ys, Cs = _sample_se_rff_from_x(x, sigma, omega[:, :]/np.sqrt(ss), w)
         y += ys
         C += Cs
 
@@ -291,7 +347,11 @@ def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: floa
     y_noise = y + noise
     return y_noise, C
 
-def sample_se_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,rng: np.random.Generator, D: int) -> Tuple[NPSample, NPKernel]:
+
+def sample_se_rff_from_x(
+        x: NPInputMat, sigma: float, noise_var: float, l: float,
+        rng: np.random.Generator, D: int) -> Tuple[
+        NPSample, NPKernel]:
     """ Generates sample from approximate GP using RFF method at points x
 
     Args:
@@ -309,26 +369,42 @@ def sample_se_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
 
-    w = rng.standard_normal((D,1))
+    w = rng.standard_normal((D, 1))
 
     y, approx_cov = _sample_se_rff_from_x(x, sigma, omega, w)
-    noise = rng.normal(scale=np.sqrt(noise_var), size=n)
+    noise = rng.normal(scale=np.sqrt(noise_var), size=(n, ))
+    # print(y.shape, noise.shape, flush=True)
     y_noise = y + noise
     return y_noise, approx_cov
 
-@jit(nopython=True)
-def _sample_se_rff_from_x(x: NPInputMat, sigma: float, omega: NDArray[Shape["N,D"], Float], w: NDArray[Shape["D,1"], Float]) -> Tuple[NPSample, NPKernel]:
+
+# @jit(nopython=True)
+def _sample_se_rff_from_x(x: NPInputMat, sigma: float,
+                          omega: NDArray[Shape["N,D"],
+                                         Float],
+                          w: NDArray[Shape["D,1"],
+                                     Float],
+                          compute_cov=False) -> Tuple[NPSample, NPKernel]:
     D = w.shape[0]
-    Z = zrf(omega, D, x)*np.sqrt(sigma)
-    approx_cov = Z @ Z.T
-    y = (Z @ w).flatten()
+    # Z = zrf(omega, D, x)*np.sqrt(sigma)
+    if compute_cov:
+        pass
+        # approx_cov = Z @ Z.T
+    else:
+        approx_cov = np.nan
+    # y = (Z @ w).flatten()
+    n = x.shape[0]
+    y = np.zeros((n, ))
+    for i in range(n):
+        y[i] = f_rf(omega, D, w, x[i, :]) * np.sqrt(sigma)
     return y, approx_cov
 
 
 def sample_ciq_from_x(
-        x: Union[torch.Tensor, NPInputMat], sigma: float, noise_var: float, l: float,
-        rng: np.random.Generator, J: int, Q: Optional[int] = None,
-        checkpoint_size: int = 1500, max_preconditioner_size: int = 0) -> Tuple[
+        x: Union[torch.Tensor, NPInputMat],
+        sigma: float, noise_var: float, l: float, rng: np.random.Generator,
+        J: int, Q: Optional[int] = None, checkpoint_size: int = 1500,
+        max_preconditioner_size: int = 0) -> Tuple[
         NPSample, Union[NPKernel, float]]:
     """ Generates sample from approximate GP using RFF method at points x
 
@@ -540,7 +616,6 @@ def ID_Preconditioner(self):
 
     if self._q_cache is None:
 
-        from gpytorch.lazy.matmul_lazy_tensor import MatmulLazyTensor
         import scipy.linalg.interpolative as sli
 
         # get quantities & form sample matrix
@@ -661,7 +736,7 @@ lenscale %.2f
     )
 
     # x, sample = generate_ciq_data(
-        # N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
+    # N, xmean, xcov_diag, noise_var, sigma, l, J, Q)
     x, sample = generate_rff_data(N, xmean, xcov_diag, noise_var, sigma, l, D)
     # np.savetxt("x.out.gz", x)
     # np.savetxt("sample.out.gz", sample)

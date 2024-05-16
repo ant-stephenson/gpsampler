@@ -292,10 +292,12 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
             G = kargs["G"]
         else:
             G = int(np.sqrt(D))
-            D = G
+            D = D // G
         nu = kargs["nu"]
 
         return sample_mat_rff_from_x(x, sigma, noise_var, l, rng, D, G, nu)
+    elif kernel_type == "laplacian":
+        return sample_lap_rff_from_x(x, sigma, noise_var, l, rng, D)
     else:
         raise NotImplementedError
 
@@ -368,6 +370,40 @@ def sample_se_rff_from_x(
     n, d = x.shape
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
+
+    w = rng.standard_normal((D, 1))
+
+    y, approx_cov = _sample_se_rff_from_x(x, sigma, omega, w)
+    noise = rng.normal(scale=np.sqrt(noise_var), size=(n, ))
+    # print(y.shape, noise.shape, flush=True)
+    y_noise = y + noise
+    return y_noise, approx_cov
+
+
+def sample_lap_rff_from_x(
+        x: NPInputMat, sigma: float, noise_var: float, l: float,
+        rng: np.random.Generator, D: int) -> Tuple[
+        NPSample, NPKernel]:
+    """ Generates sample from approximate Laplacian-kernel GP using RFF method
+    at points x
+    See classic Random Features for large-Scale Kernel Machiens (Rahimi 2009) 
+
+    Args:
+        x (np.ndarray): Nxd matrix of locations
+        sigma (float): outputscale
+        noise_var (float): noise variance
+        l (float): lengthscale
+        rng (Generator): RNG
+        D (int): Number of RFF
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: Approx. GP draw; 1D array of length n and approx cov
+    """
+    n, d = x.shape
+    cov_omega = np.eye(d)/l**2
+    omega = np.zeros((D//2, d))
+    for di in range(d):
+        omega[:, di] = np.tan(np.pi*(rng.uniform(size=D//2) - 0.5))
 
     w = rng.standard_normal((D, 1))
 

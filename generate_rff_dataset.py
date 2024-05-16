@@ -3,12 +3,13 @@ Simple script to run CIQ generation code from command line.
 """
 import argparse
 import time
+import os
 
 import numpy as np
 
 from gpsampler import generate_rff_data
 
-MAX_ITERATIONS = int(1e6)
+MAX_ITERATIONS = int(1e8)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -24,11 +25,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print("Generating synthetic data with parameters:", flush=True)
-    print(f"kernel: {args.kernel_type}, n: {args.n}, dim: {args.dim}, outputscale: {args.outputscale}, lengthscale: {args.lengthscale}, noise: {args.noise_variance}, nu: {args.nu}", flush=True)
+    print(f"kernel: {args.kernel_type}, n: {args.n}, dim: {args.dimension}, outputscale: {args.outputscale}, lengthscale: {args.lengthscale}, noise: {args.noise_variance}, nu: {args.nu}", flush=True)
 
     mean = np.zeros(args.dimension)
     covs = np.ones(args.dimension) / args.dimension
-    _iterations = int(args.n / args.noise_variance)
+
+    _iterations = int(3 * args.n / args.noise_variance)
     print(f"Requested iterations = {_iterations}.")
     iterations = min(MAX_ITERATIONS, _iterations)
     print(
@@ -43,6 +45,7 @@ if __name__ == "__main__":
         args.n, mean, covs, noise_variance, outputscale, lengthscale,
         iterations, args.kernel_type, nu=args.nu)
     data = np.hstack([x, y.reshape((-1, 1))])
+
     np.save(args.out, data)
     toc = time.perf_counter()
     print(f"Time taken: {toc-tic}", flush=True)

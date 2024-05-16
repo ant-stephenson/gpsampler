@@ -11,7 +11,9 @@ if __name__ == "__main__":
     parser.add_argument("--lengthscale", type=float, default=1.0)
     parser.add_argument("--dimension", type=int, default=10)
     parser.add_argument("--out", type=str, default="dataset_test_output.csv")
-    parser.add_argument("--filepath", type=str, default="synthetic-datasets/RFF/output_kt_exp_dim_10_ls_3.0_1.npy")
+    parser.add_argument(
+        "--filepath", type=str,
+        default="synthetic-datasets/RFF/output_kt_exp_dim_10_ls_3.0_1.npy")
     parser.add_argument("--kernel_type", type=str, default="exp")
     parser.add_argument("--method", type=str, default="rff")
     parser.add_argument("--id", type=int, default=1)

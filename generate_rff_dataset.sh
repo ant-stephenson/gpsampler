@@ -35,11 +35,6 @@ KTYPE="exp"
 
 ID=1
 
-# already done this one and they take ages...
-# if [ $DIM == 100 ] && [ $LENSCALE == 3.0 ] && [ $KTYPE == "exp" ]; then
-#     exit 1
-# fi
-
 OUTFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KTYPE}_dim_${DIM}_ls_${LENSCALE}_${ID}.npy" 
 
 if [ $KTYPE == "exp" ]; then

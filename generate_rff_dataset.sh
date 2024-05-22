@@ -50,7 +50,7 @@ elif [ $KTYPE == "rbf" ]; then
 elif [ $KTYPE == "matern" ]; then
     python $SCRIPT_DIR/gpsampler/generate_rff_dataset.py --n $N --dimension $DIM \
         --lengthscale $LENSCALE --outputscale $KS --noise_variance $NV \
-        --kernel_type "rbf" --nu $NU \
+        --kernel_type "matern" --nu $NU \
         --out $OUTFILE --id $ID
 else
     python $SCRIPT_DIR/gpsampler/generate_rff_dataset.py --n $N --dimension $DIM \

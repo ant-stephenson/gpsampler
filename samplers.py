@@ -1,6 +1,6 @@
 from re import I
 import numpy as np
-# from numba import jit
+from numba import jit, prange
 from scipy.special import ellipj, ellipk
 import scipy.linalg as linalg
 from functools import partial
@@ -27,7 +27,7 @@ from gpytorch.utils.warnings import NumericalWarning
 
 # warnings.simplefilter("error")
 
-rng = np.random.default_rng()
+rng = np.random.default_rng(1)
 T_TYPE = torch.cuda.DoubleTensor if torch.cuda.is_available(
 ) else torch.DoubleTensor  # type: ignore
 
@@ -44,7 +44,7 @@ def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float:
     return sigma * np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
 
 
-# @jit(nopython=True)
+@jit(nopython=True, fastmath=True)
 def zrf(omega: NDArray[Shape["D, P"],
                        Float],
         D: int, x: NPInputVec) -> NDArray[Shape["[cos,sin] x n_rff"],
@@ -53,11 +53,11 @@ def zrf(omega: NDArray[Shape["D, P"],
         n = 1
     else:
         n = x.shape[0]
-    v = omega @ x.T
-    return np.sqrt(2/D) * np.hstack((np.cos(v.T), np.sin(v.T))).reshape(-1, 1)
+    v = np.dot(omega, x.T) #omega @ x.T
+    return np.sqrt(2/D) * np.concatenate((np.cos(v), np.sin(v))) 
 
 
-# @jit(nopython=True)
+@jit(nopython=True, fastmath=True)
 def f_rf(
     omega: NDArray[Shape["D, P"],
                    Float],
@@ -285,14 +285,17 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
     """
     if kernel_type == "rbf":
         return sample_se_rff_from_x(x, sigma, noise_var, l, rng, D)
-    elif kernel_type == "matern":
+    elif kernel_type == "matern" or kernel_type == "exp":
         kargs = {**kwargs}
         if "G" in kargs.keys():
             G = kargs["G"]
         else:
             G = int(np.sqrt(D))
             D = D // G
-        nu = kargs["nu"]
+        if kernel_type == "matern":
+            nu = kargs["nu"]
+        else:
+            nu = 0.5
 
         return sample_mat_rff_from_x(x, sigma, noise_var, l, rng, D, G, nu)
     elif kernel_type == "laplacian":
@@ -305,7 +308,7 @@ def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l:
                           float, rng: np.random.Generator, D: int, G: int,
                           nu: float) -> Tuple[NPSample, NPKernel]:
     n, d = x.shape
-    w = rng.standard_normal((D, 1))
+    w = rng.standard_normal((D, ))
     s = rng.gamma(shape=nu, scale=l**2/nu, size=G)
     # omega = rng.standard_normal((D//2, d, G))
     N = int(1e6)
@@ -370,7 +373,7 @@ def sample_se_rff_from_x(
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
 
-    w = rng.standard_normal((D, 1))
+    w = rng.standard_normal((D, ))
 
     y, approx_cov = _sample_se_rff_from_x(x, sigma, omega, w)
     noise = rng.normal(scale=np.sqrt(noise_var), size=(n, ))
@@ -413,7 +416,7 @@ def sample_lap_rff_from_x(
     return y_noise, approx_cov
 
 
-# @jit(nopython=True)
+@jit(nopython=True, parallel=True, fastmath=True)
 def _sample_se_rff_from_x(x: NPInputMat, sigma: float,
                           omega: NDArray[Shape["N,D"],
                                          Float],
@@ -430,7 +433,7 @@ def _sample_se_rff_from_x(x: NPInputMat, sigma: float,
     # y = (Z @ w).flatten()
     n = x.shape[0]
     y = np.zeros((n, ))
-    for i in range(n):
+    for i in prange(n):
         y[i] = f_rf(omega, D, w, x[i, :]) * np.sqrt(sigma)
     return y, approx_cov
 

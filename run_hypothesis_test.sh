@@ -28,13 +28,13 @@ echo $SLURM_JOB_START_TIME
 DIMS=(10 50 100)
 DIMS+=( "${DIMS[@]}" "${DIMS[@]}" )
 LENSCALES=(0.5 0.5 0.5 1.0 1.0 1.0 3.0 3.0 3.0)
+LENSCALES=(4.0 4.0 4.0 5.0 5.0 5.0 6.0 6.0 6.0)
 
 DIM="${DIMS[$SLURM_ARRAY_TASK_ID]}"
 LENSCALE="${LENSCALES[$SLURM_ARRAY_TASK_ID]}"
-KTRUE="laplacian"
+KTRUE="exp"
 KMODEL="exp"
-ID=99
-LENSCALE=0.9
+ID=1
 
 INFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KTRUE}_dim_${DIM}_ls_${LENSCALE}_${ID}.npy" 
 OUTFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/data_test_outputs.csv" 

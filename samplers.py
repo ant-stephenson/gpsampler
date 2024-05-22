@@ -1,6 +1,6 @@
 from re import I
 import numpy as np
-from numba import jit
+# from numba import jit
 from scipy.special import ellipj, ellipk
 import scipy.linalg as linalg
 from functools import partial
@@ -20,9 +20,9 @@ import copy
 
 import torch
 
-from gpytorch.utils.broadcasting import _mul_broadcast_shape
-from gpytorch.utils.linear_cg import linear_cg
-from gpytorch.utils.minres import minres
+from linear_operator.utils.broadcasting import _matmul_broadcast_shape
+from linear_operator.utils.linear_cg import linear_cg
+from linear_operator.utils.minres import minres
 from gpytorch.utils.warnings import NumericalWarning
 
 # warnings.simplefilter("error")
@@ -39,7 +39,7 @@ NPSample = NDArray[Shape["N,1"], Float]
 NPKernel = NDArray[Shape["N,N"], Float]
 
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def k_true(sigma: float, l: float, xp: np.ndarray, xq: np.ndarray) -> float:
     return sigma * np.exp(-0.5*np.dot(xp-xq, xp-xq)/l**2)  # true kernel
 
@@ -491,8 +491,8 @@ def sample_ciq_from_x(x: Union[torch.Tensor, NPInputMat],
             gpytorch.settings.min_preconditioning_size(100))
         minres_tol = stack.enter_context(
             gpytorch.settings.minres_tolerance(1e-10))
-        _use_eval_tolerance = stack.enter_context(
-            gpytorch.settings._use_eval_tolerance(True))
+        # _use_eval_tolerance = stack.enter_context(
+        #     gpytorch.settings._use_eval_tolerance(True))
         eval_cg_tolerance = stack.enter_context(
             gpytorch.settings.eval_cg_tolerance(1e-10))
         max_cg_iterations = stack.enter_context(
@@ -535,7 +535,9 @@ def contour_integral_quad(
     if num_contour_quadrature is None:
         num_contour_quadrature = gpytorch.settings.num_contour_quadrature.value()
 
-    output_batch_shape = _mul_broadcast_shape(
+    # output_batch_shape = _matmul_broadcast_shape(
+    #     lazy_tensor.batch_shape, rhs.shape[:-2])
+    output_batch_shape = torch.broadcast_shapes(
         lazy_tensor.batch_shape, rhs.shape[:-2])
     preconditioner, preconditioner_lt, _ = lazy_tensor._preconditioner()
 

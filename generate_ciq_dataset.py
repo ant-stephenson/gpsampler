@@ -6,10 +6,12 @@ import argparse
 import numpy as np
 
 from gpsampler.samplers import generate_ciq_data
-from gpsampler.utils import compute_rbf_J
+from gpsampler.utils import compute_max_eigval_UB, compute_J_noprecond, compute_J_precond
 
-MAX_ITERATIONS = 42010 # On a 16GB GPU, we found empirically this is close to the largest feasible value (larger => more memory)
-CHECKPOINT_SIZE = 1500 # Also found empirically on 16GB GPU. Increase if a bigger card is available.
+# On a 16GB GPU, we found empirically this is close to the largest feasible value (larger => more memory)
+MAX_ITERATIONS = 42010
+# Also found empirically on 16GB GPU. Increase if a bigger card is available.
+CHECKPOINT_SIZE = 1500
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -18,6 +20,7 @@ if __name__ == "__main__":
     parser.add_argument("--outputscale", type=float, default=1.0)
     parser.add_argument("--noise_variance", type=float, default=0.01)
     parser.add_argument("--kernel_type", type=str, default='exp')
+    parser.add_argument("--nu", type=float, default=0.5)
     parser.add_argument("--dimension", type=int, default=10)
     parser.add_argument("--out", type=str, default="data.npy")
     parser.add_argument("--precond", type=bool, default=True)
@@ -40,18 +43,19 @@ if __name__ == "__main__":
     #     np.sqrt(args.noise_variance))
     if args.precond:
         max_preconditioner_size = int(np.sqrt(args.n))
+        _iterations = compute_J_precond(
+            args.n, args.dimension, args.lengthscale, args.noise_variance, args.outputscale, args.nu)
     else:
         max_preconditioner_size = 0
+        cond = compute_max_eigval_UB(
+            args.n, args.dimension, args.lengthscale, args.nu, args.outputscale) / args.noise_variance
+        _iterations = compute_J_noprecond(args.n, args.noise_variance, cond)
 
-    if args.kernel_type.lower() == 'rbf':
-        _iterations = compute_rbf_J(args.n, args.dimension, args.lengthscale, args.noise_variance, eta=args.eta)
-    elif args.kernel_type.lower() == 'exp':
-        raise NotImplementedError
-    else:
-        raise NotImplementedError
-    print(f"Requested iterations = {_iterations}.")
+    print(f"Requested iterations = {_iterations}.", flush=True)
     iterations = min(MAX_ITERATIONS, _iterations)
-    print(f"Using {iterations} iterations. Using/requested = {iterations/_iterations}")
+    print(
+        f"Using {iterations} iterations. Using/requested = {iterations/_iterations}",
+        flush=True)
 
     quadrature_points = int(np.log(args.n))
 
@@ -59,7 +63,10 @@ if __name__ == "__main__":
     outputscale = np.array(args.outputscale, dtype=np.float64).item()
     noise_variance = np.array(args.noise_variance, dtype=np.float64).item()
     kernel_type = args.kernel_type
-    x, y = generate_ciq_data(args.n, mean, covs, noise_variance, outputscale,
-                             lengthscale, kernel_type, iterations, quadrature_points, checkpoint_size=CHECKPOINT_SIZE, max_preconditioner_size=max_preconditioner_size)
+    x, y = generate_ciq_data(
+        args.n, mean, covs, noise_variance, outputscale, lengthscale,
+        kernel_type, iterations, quadrature_points,
+        checkpoint_size=CHECKPOINT_SIZE,
+        max_preconditioner_size=max_preconditioner_size)
     data = np.hstack([x, y.reshape((-1, 1))])
     np.save(args.out, data)

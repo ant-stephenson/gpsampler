@@ -53,8 +53,8 @@ def zrf(omega: NDArray[Shape["D, P"],
         n = 1
     else:
         n = x.shape[0]
-    v = np.dot(omega, x.T) #omega @ x.T
-    return np.sqrt(2/D) * np.concatenate((np.cos(v), np.sin(v))) 
+    v = np.dot(omega, x.T)  # omega @ x.T
+    return np.sqrt(2/D) * np.concatenate((np.cos(v), np.sin(v)))
 
 
 @jit(nopython=True, fastmath=True)
@@ -290,12 +290,14 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
         if "G" in kargs.keys():
             G = kargs["G"]
         else:
-            G = int(np.sqrt(D))
+            G = int(D**0.4)
             D = D // G
         if kernel_type == "matern":
             nu = kargs["nu"]
         else:
             nu = 0.5
+
+        print(f"Using {D} RFFs and {G} Gamma samples")
 
         return sample_mat_rff_from_x(x, sigma, noise_var, l, rng, D, G, nu)
     elif kernel_type == "laplacian":

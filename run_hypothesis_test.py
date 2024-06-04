@@ -3,7 +3,7 @@ import os
 import numpy as np
 from scipy import linalg, stats
 import argparse
-from gpprediction.utils import k_se, k_mat_half as k_exp, k_lap
+from gpprediction.utils import k_se, k_mat_half as k_exp, k_lap, k_mat_3half
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -51,7 +51,8 @@ if __name__ == "__main__":
     data = np.load(filename)
 # %%
 
-    kernel = {"rbf": k_se, "exp": k_exp, "laplacian": k_lap}[kernel_type]
+    kernel = {"rbf": k_se, "exp": k_exp, "laplacian": k_lap,
+              "matern": k_mat_3half}[kernel_type]
 
     def test_dataset(data, kernel, ls):
         subset = np.random.choice(data.shape[0], m)

@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=10:00:00
 #SBATCH --mem-per-cpu=10G
-#SBATCH --array=0-8
+#SBATCH --array=0-11
 #SBATCH --mail-user=$USER@bristol.ac.uk
 #SBATCH --mail-type=END
 #SBATCH --output=/user/work/ll20823/mini-project/slurm/sampling/test-%j_%a.out
@@ -25,16 +25,15 @@ source $SCRIPT_DIR/projenv/bin/activate
 
 echo $SLURM_JOB_START_TIME
 
-DIMS=(10 50 100)
-DIMS+=( "${DIMS[@]}" "${DIMS[@]}" )
-LENSCALES=(0.5 0.5 0.5 1.0 1.0 1.0 3.0 3.0 3.0)
-LENSCALES=(4.0 4.0 4.0 5.0 5.0 5.0 6.0 6.0 6.0)
+DIMS=(2 10 20 50)
+LENSCALES=(3.0 5.0 7.0)
+KERNS=("matern")
 
-DIM="${DIMS[$SLURM_ARRAY_TASK_ID]}"
-LENSCALE="${LENSCALES[$SLURM_ARRAY_TASK_ID]}"
-KTRUE="exp"
-KMODEL="exp"
-ID=1
+$(python  get_bash_dlk.py -d ${DIMS[@]} -ls ${LENSCALES[@]} -kt ${KERNS[@]} -arr $SLURM_ARRAY_TASK_ID)
+
+KTRUE=$KERN
+KMODEL=$KERN
+ID=4
 
 INFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KTRUE}_dim_${DIM}_ls_${LENSCALE}_${ID}.npy" 
 OUTFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/data_test_outputs.csv" 

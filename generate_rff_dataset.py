@@ -9,7 +9,7 @@ import numpy as np
 
 from gpsampler import generate_rff_data
 
-MAX_ITERATIONS = int(1e8)
+MAX_ITERATIONS = int(1e9)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -29,19 +29,20 @@ if __name__ == "__main__":
         args.nu = 0.5
 
     print("Generating synthetic data with parameters:", flush=True)
-    print(f"kernel: {args.kernel_type}, n: {args.n}, dim: {args.dimension}, outputscale: {args.outputscale}, lengthscale: {args.lengthscale}, noise: {args.noise_variance}, nu: {args.nu}", flush=True)
+    print(f"kernel: {args.kernel_type}, n: {args.n}, dim: {args.dimension}, outputscale: {args.outputscale}, lengthscale: {args.lengthscale}, noise: {args.noise_variance}, nu: {args.nu}, id: {args.id}", flush=True)
 
     mean = np.zeros(args.dimension)
     covs = np.ones(args.dimension) / args.dimension
 
-    if args.kernel_type == "exp" and args.id != 0:
+    if 0:  # args.kernel_type in ("exp", "matern") and args.id != 0:
         _iterations = int(args.n ** (3/2) / args.noise_variance)
     else:
-        _iterations = int(3 * args.n / args.noise_variance)
-    print(f"Requested iterations = {_iterations}.")
+        _iterations = int(20*3 * args.n / args.noise_variance)
+    print(f"Requested iterations = {_iterations}.", flush=True)
     iterations = min(MAX_ITERATIONS, _iterations)
     print(
-        f"Using {iterations} iterations. Using/requested = {iterations/_iterations}")
+        f"Using {iterations} iterations. Using/requested = {iterations/_iterations}",
+        flush=True)
 
     lengthscale = np.array(args.lengthscale, dtype=np.float64).item()
     outputscale = np.array(args.outputscale, dtype=np.float64).item()

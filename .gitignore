@@ -131,3 +131,6 @@ dmypy.json
 #Mac
 *.DS_Store
 generate_data.sh
+
+#figures
+*.png

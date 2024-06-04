@@ -1,10 +1,8 @@
 from re import I
 import numpy as np
 from numba import jit, prange
-from scipy.special import ellipj, ellipk
+from scipy.special import ellipj, ellipk, genlaguerre, roots_genlaguerre, gamma
 import scipy.linalg as linalg
-from functools import partial
-from itertools import repeat
 import torch
 import gpytorch
 from joblib import Parallel, delayed
@@ -69,13 +67,23 @@ def f_rf(
 
 # @jit(nopython=True)
 def estimate_rff_kernel(
-        X: NPInputMat, D: int, ks: float, l: float) -> NPKernel:
+        X: NPInputMat, D: int, ks: float, omega: np.ndarray) -> NPKernel:
+    Z = zrf(omega, D, X).T*np.sqrt(ks)
+    approx_cov = np.inner(Z, Z)
+    return approx_cov
+
+def estimate_se_rff_kernel(X: NPInputMat, D: int, ks: float, l: float) -> NPKernel:
     N, d = X.shape
     cov_omega = np.eye(d)/l**2
     omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
-    Z = zrf(omega, D, X)*np.sqrt(ks)
-    approx_cov = np.inner(Z, Z)
-    return approx_cov
+    return estimate_rff_kernel(X, D, ks, omega)
+
+def estimate_mat_rff_kernel(X: NPInputMat, D: int, ks: float, l: float, nu: float) -> NPKernel:
+    N, d = X.shape
+    omega_y = rng.standard_normal((D//2, d)) * np.sqrt(2)/l
+    omega_u = rng.chisquare(2*nu, size=(D//2,))
+    omega = np.sqrt(2*nu/np.tile(omega_u,(d,1)).T) * omega_y
+    return estimate_rff_kernel(X, D, ks, omega)
 
 
 def construct_kernels(
@@ -290,14 +298,18 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
         if "G" in kargs.keys():
             G = kargs["G"]
         else:
-            G = int(np.sqrt(D))
-            D = D // G
+            G = np.min((int(D**0.4), 1000))
+            # base_N = D ** 0.25
+            # G = int(base_N)
+            # D = D // G
+            # print(f"Using {D} RFFs and {G} Gauss-Legendre nodes")
+            print(f"Using {D} RFFs and {G} Gamma samples")
         if kernel_type == "matern":
             nu = kargs["nu"]
         else:
             nu = 0.5
 
-        return sample_mat_rff_from_x(x, sigma, noise_var, l, rng, D, G, nu)
+        return sample_mat_rff_from_x2(x, sigma, noise_var, l, rng, D, G, nu)
     elif kernel_type == "laplacian":
         return sample_lap_rff_from_x(x, sigma, noise_var, l, rng, D)
     else:
@@ -351,6 +363,57 @@ def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l:
     y_noise = y + noise
     return y_noise, C
 
+
+def compute_ls_and_sigmas(n, J, nu, ls):
+    roots_j = roots_genlaguerre(J, nu-1)[0]
+    w_j = gamma(J+nu)/gamma(J+1) * roots_j / ((J+1)**2 * genlaguerre(J+1, nu-1)(roots_j)**2)
+    l_j = np.sqrt(roots_j/nu) * ls
+    sigma_j =np.sqrt(w_j / gamma(nu))
+    return l_j, sigma_j
+
+def sample_mat_rff_from_x2(x, sigma: float, noise_var: float, l:
+                          float, rng: np.random.Generator, D: int, J: int,
+                          nu: float):
+    n, d = x.shape
+    w = rng.standard_normal((D, ))
+    N = int(1e6)
+    y, C = np.zeros(n,), np.nan
+
+    J = 12 # hard coded - doesn't seem to improve with higher J..
+    l_J, sigma_J = compute_ls_and_sigmas(n, J, nu, l)
+
+    for j in range(J):
+        omega = rng.standard_normal((D//2, d))
+        if n > N:
+            ys, Cs = np.zeros(n,), np.nan
+            parts = int(np.ceil(n/N))
+            for p in range(parts):
+                idx = np.s_[(p*N):((p+1)*N)]
+                ys[idx], Cp = _sample_se_rff_from_x(
+                    x[idx, :], sigma, omega[:, :]/l_J[j], w)
+        else:
+            ys, Cs = _sample_se_rff_from_x(x, sigma, omega[:, :]/l_J[j], w)
+        y += sigma_J[j] * ys
+        C += sigma_J[j] * Cs
+
+    noise = rng.normal(scale=np.sqrt(noise_var), size=n)
+    y_noise = y + noise
+    return y_noise, C
+
+def sample_mat_rff_from_x3(x, sigma: float, noise_var: float, l:
+                          float, rng: np.random.Generator, D: int, J: int,
+                          nu: float):
+    n, d = x.shape
+    w = rng.standard_normal((D, ))
+    y, C = np.zeros(n,), np.nan
+
+    omega_y = rng.standard_normal((D//2, d)) * np.sqrt(2)/l
+    omega_u = rng.chisquare(2*nu, size=(D//2,))
+    omega = np.sqrt(2*nu/np.tile(omega_u,(d,1)).T) * omega_y
+    y, approx_cov = _sample_se_rff_from_x(x, sigma, omega, w)
+    noise = rng.normal(scale=np.sqrt(noise_var), size=(n, ))
+    y_noise = y + noise
+    return y_noise, approx_cov
 
 def sample_se_rff_from_x(
         x: NPInputMat, sigma: float, noise_var: float, l: float,
@@ -416,7 +479,7 @@ def sample_lap_rff_from_x(
     return y_noise, approx_cov
 
 
-@jit(nopython=True, parallel=True, fastmath=True)
+# @jit(nopython=True, parallel=True, fastmath=True)
 def _sample_se_rff_from_x(x: NPInputMat, sigma: float,
                           omega: NDArray[Shape["N,D"],
                                          Float],
@@ -424,16 +487,16 @@ def _sample_se_rff_from_x(x: NPInputMat, sigma: float,
                                      Float],
                           compute_cov=False) -> Tuple[NPSample, NPKernel]:
     D = w.shape[0]
-    # Z = zrf(omega, D, x)*np.sqrt(sigma)
     if compute_cov:
-        pass
-        # approx_cov = Z @ Z.T
+        Z = zrf(omega, D, x)*np.sqrt(sigma)
+        approx_cov = Z.T @ Z
+        # y = (Z @ w).flatten()
     else:
         approx_cov = np.nan
-    # y = (Z @ w).flatten()
+    
     n = x.shape[0]
     y = np.zeros((n, ))
-    for i in prange(n):
+    for i in range(n):
         y[i] = f_rf(omega, D, w, x[i, :]) * np.sqrt(sigma)
     return y, approx_cov
 

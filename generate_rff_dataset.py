@@ -9,7 +9,7 @@ import numpy as np
 
 from gpsampler import generate_rff_data
 
-MAX_ITERATIONS = int(1e8)
+MAX_ITERATIONS = int(1e9)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

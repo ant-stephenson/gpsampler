@@ -26,6 +26,7 @@ d = 5
 ls =0.5
 nv = 0.008
 ks = 1-nv
+nu = 1.5
 
 
 # pytestmark = pytest.mark.parametrize("d,ls", list(cartesian_prod([n],all_ds,all_ls,[nv],[ks])))
@@ -45,13 +46,25 @@ def X():
 
 @pytest.fixture
 def K(X):
-    kernel = gpytorch.kernels.RBFKernel()
-    kernel.lengthscale = ls
-    kernel = gpytorch.kernels.ScaleKernel(kernel)
-    kernel.outputscale = ks
+    # kernel = gpytorch.kernels.RBFKernel()
+    # kernel.lengthscale = ls
+    # kernel = gpytorch.kernels.ScaleKernel(kernel)
+    # kernel.outputscale = ks
 
-    K = kernel(torch.as_tensor(X)).add_jitter(nv)
-    return K.evaluate().detach().numpy()
+    # K = kernel(torch.as_tensor(X)).add_jitter(nv)
+    # return K.evaluate().detach().numpy()
+    return gm.k_se(X,X,ks,ls)
+
+@pytest.fixture
+def Kmat(X):
+    # kernel = gpytorch.kernels.RBFKernel()
+    # kernel.lengthscale = ls
+    # kernel = gpytorch.kernels.ScaleKernel(kernel)
+    # kernel.outputscale = ks
+
+    # K = kernel(torch.as_tensor(X)).add_jitter(nv)
+    # return K.evaluate().detach().numpy()
+    return gm.k_mat(X,X,ks,ls,nu)
 
 @pytest.fixture
 def u():

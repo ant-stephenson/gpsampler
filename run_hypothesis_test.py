@@ -3,21 +3,21 @@ import os
 import numpy as np
 from scipy import linalg, stats
 import argparse
-from gpprediction.utils import k_se, k_mat_half as k_exp, k_lap
+from gpprediction.utils import k_se, k_mat_half as k_exp, k_mat_3half
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--m", type=int, default=1100)
-    parser.add_argument("--lengthscale", type=float, default=1.0)
-    parser.add_argument("--dimension", type=int, default=10)
-    parser.add_argument("--out", type=str, default="dataset_test_output.csv")
+    parser.add_argument("-m","--m", type=int, default=5000)
+    parser.add_argument("-ls","--lengthscale", type=float, default=1.0)
+    parser.add_argument("-d","--dimension", type=int, default=10)
+    parser.add_argument("-o","--out", type=str, default="dataset_test_output.csv")
     parser.add_argument(
-        "--filepath", type=str,
+        "-f","--filepath", type=str,
         default="synthetic-datasets/RFF/output_kt_exp_dim_10_ls_3.0_1.npy")
-    parser.add_argument("--kernel_type", type=str, default="exp")
-    parser.add_argument("--method", type=str, default="rff")
-    parser.add_argument("--id", type=int, default=1)
-    parser.add_argument("--significance", type=float, default=0.1)
+    parser.add_argument("-kt","--kernel_type", type=str, default="exp")
+    parser.add_argument("-mt","--method", type=str, default="rff")
+    parser.add_argument("-id","--id", type=int, default=1)
+    parser.add_argument("-sig","--significance", type=float, default=0.1)
 
     args = parser.parse_args()
 
@@ -51,7 +51,7 @@ if __name__ == "__main__":
     data = np.load(filename)
 # %%
 
-    kernel = {"rbf": k_se, "exp": k_exp, "laplacian": k_lap}[kernel_type]
+    kernel = {"rbf": k_se, "exp": k_exp, "matern32": k_mat_3half}[kernel_type]
 
     def test_dataset(data, kernel, ls):
         subset = np.random.choice(data.shape[0], m)

@@ -17,18 +17,18 @@
 source slurm_init.sh
 
 DIMS=(10)
-LENSCALES=(1.0 3.0 5.0)
-KERNS=("matern")
+LENSCALES=(0.5 2.0 5.0)
+KERNS=("rbf")
 
 $(python  get_bash_dlk.py -d ${DIMS[@]} -ls ${LENSCALES[@]} -kt ${KERNS[@]} -arr $SLURM_ARRAY_TASK_ID)
 
-NU=1.5
+NU=2.5
 
 N=110000
 KS=0.9
 NV=0.1
 
-ID=2
+ID=3
 
 # 1: 3 * n/nv
 # 2: 12 * n/nv
@@ -46,6 +46,7 @@ elif [ $KERN == "rbf" ]; then
         --lengthscale $LENSCALE --outputscale $KS --noise_variance $NV --kernel_type "rbf" \
         --out $OUTFILE --id $ID
 elif [ $KERN == "matern" ]; then
+    OUTFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KERN}_dim_${DIM}_ls_${LENSCALE}_nu_${NU}_${ID}.npy" 
     python $SCRIPT_DIR/gpsampler/generate_rff_dataset.py --n $N --dimension $DIM \
         --lengthscale $LENSCALE --outputscale $KS --noise_variance $NV \
         --kernel_type "matern" --nu $NU \

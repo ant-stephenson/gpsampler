@@ -1,5 +1,6 @@
 # %%
 import os
+import re
 import numpy as np
 from scipy import linalg, stats
 import argparse
@@ -7,16 +8,17 @@ from gpprediction.utils import k_se, k_mat_half as k_exp, k_lap, k_mat_3half
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--m", type=int, default=1100)
-    parser.add_argument("--lengthscale", type=float, default=1.0)
-    parser.add_argument("--dimension", type=int, default=10)
+    parser.add_argument("--m", type=int, default=10000)
+    parser.add_argument("--lengthscale", type=float)
+    parser.add_argument("--nu", type=float)
+    parser.add_argument("--dimension", type=int)
     parser.add_argument("--out", type=str, default="dataset_test_output.csv")
     parser.add_argument(
         "--filepath", type=str,
         default="synthetic-datasets/RFF/output_kt_exp_dim_10_ls_3.0_1.npy")
-    parser.add_argument("--kernel_type", type=str, default="exp")
+    parser.add_argument("--kernel_type", type=str)
     parser.add_argument("--method", type=str, default="rff")
-    parser.add_argument("--id", type=int, default=1)
+    parser.add_argument("--id", type=int)
     parser.add_argument("--significance", type=float, default=0.1)
 
     args = parser.parse_args()
@@ -28,22 +30,31 @@ if __name__ == "__main__":
     ls = args.lengthscale
     nv = {"rff": 0.1, "ciq": 0.008}[method]
     m = args.m
+    nu = args.nu
     significance_threshold = args.significance
 
     filename = args.filepath
 
-    # sub_dirs = {"ciq": "CIQ_GENERATION_RESULTS", "rff": "RFF"}
-
-    # data_path = f"../synthetic-datasets/{sub_dirs[method]}/"
-    # if id != 0:
-    #     filename = f"output_kt_{kernel_type}_dim_{d}_ls_{ls}_{id}.npy"
-    # else:
-    #     filename = f"output_kt_{kernel_type}_dim_{d}_ls_{ls}.npy"
-
-    # # Nick data
-    # if id in (1, 3) and method == "ciq":
-    #     data_path = f"../synthetic-datasets/ciq_synthetic_datasets/noise_var=0.008/"
-    #     filename = f"DIM{{{d}}}_LENSCALE{{{ls}}}_{{{id}}}/data.npy"
+    if not all([id, kernel_type, ls, d]):
+        print(
+            "Variables ID, kernel, lengthscale and dim not supplied; inferring from filename:",
+            flush=True)
+        if method == 'rff':
+            if 'nu' in filename:
+                kernel_type, d, ls, nu, id = re.findall(
+                    r"kt\_(\w{3})\_dim\_(\d{1,3})\_ls\_(\d\.\d)\_nu\_(\d\.\d)_(\d)", filename)[0]
+                nu = float(nu)
+            else:
+                kernel_type, d, ls, id = re.findall(
+                    r"kt\_(\w{3})\_dim\_(\d{1,3})\_ls\_(\d\.\d)_(\d)", filename)[0]
+                nu = None
+            id = int(id)
+        elif method == 'ciq':
+            kernel_type, d, ls = re.findall(
+                r"kt\_(\w{3})\_dim\_(\d{1,3})\_ls\_(\d\.\d)", filename)[0]
+            nu = None
+        d = int(d)
+        ls = float(ls)
 
     out_file_name = args.out
 
@@ -91,10 +102,10 @@ if __name__ == "__main__":
     file_exists = os.path.isfile(out_file_name)
     with open(out_file_name, "a+") as out_file:
         if not file_exists:
-            header = "method,kernel,d,ls,m,nreps,reject,stat,pval,id,ksstat,kspval"
+            header = "method,kernel,d,ls,nu,m,nreps,reject,stat,pval,id,ksstat,kspval"
             print(header, file=out_file, flush=True)
 
-        line = f"{method},{kernel_type},{d},{ls},{m},{nreps},{rejects.mean()},{statistics.mean()},{pvalues.mean()},{id},{ks_res.statistic},{ks_res.pvalue}"
+        line = f"{method},{kernel_type},{d},{ls},{nu},{m},{nreps},{rejects.mean()},{statistics.mean()},{pvalues.mean()},{id},{ks_res.statistic},{ks_res.pvalue}"
         print(line, file=out_file, flush=True)
 
 # %%

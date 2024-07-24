@@ -1,6 +1,7 @@
 import pathlib
 import re
 import numpy as np
+import torch
 from functools import singledispatch
 from typing import Tuple
 from scipy.special import gamma, binom
@@ -302,3 +303,33 @@ def compute_submat_sz(eps, ks, delta):
     def optim(m): return 2*(m-1) * np.exp(-2*eps**2*m/ks**2) - delta
     mstar = fsolve(optim, 100).item()
     return int(np.ceil(mstar))
+
+
+@singledispatch
+def inv(M: np.ndarray, thresh=1e-9) -> np.ndarray:
+    U, s, V = linalg.svd(M)
+    sinv = 1/s
+    sinv[s < thresh] = 0.0
+    Minv = U @ np.diag(sinv) @ V
+    return Minv
+
+
+@inv.register
+def inv_torch(M: torch.Tensor) -> torch.Tensor:
+    U, s, V = torch.svd(M)
+    Minv = U @ torch.diag(1/s) @ V
+    return Minv
+
+
+@singledispatch
+def msqrt(M: np.ndarray) -> np.ndarray:
+    U, s, V = linalg.svd(M)
+    Msqrt = U @ np.diag(np.sqrt(s)) @ V
+    return Msqrt
+
+
+@msqrt.register
+def msqrt_torch(M: torch.Tensor) -> torch.Tensor:
+    U, s, V = torch.linalg.svd(M)
+    Msqrt = U @ torch.diag(torch.sqrt(s)) @ V
+    return Msqrt

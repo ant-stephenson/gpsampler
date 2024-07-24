@@ -37,7 +37,7 @@ if __name__ == "__main__":
     if 0:  # args.kernel_type in ("exp", "matern") and args.id != 0:
         _iterations = int(args.n ** (3/2) / args.noise_variance)
     else:
-        _iterations = int(20*3 * args.n / args.noise_variance)
+        _iterations = int(30 * args.n / args.noise_variance)
     print(f"Requested iterations = {_iterations}.", flush=True)
     iterations = min(MAX_ITERATIONS, _iterations)
     print(

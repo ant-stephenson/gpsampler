@@ -8,31 +8,40 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=6
 #SBATCH --time=200:00:00
-#SBATCH --mem-per-cpu=50G
-#SBATCH --array=0-2
+#SBATCH --mem-per-cpu=20G
+#SBATCH --array=0-19
 #SBATCH --mail-user=$USER@bristol.ac.uk
 #SBATCH --mail-type=END
 #SBATCH --output=/user/work/ll20823/mini-project/slurm/sampling/rff-%j_%a.out
 
 source slurm_init.sh
 
-DIMS=(10)
-LENSCALES=(0.5 2.0 5.0)
-KERNS=("rbf")
+DIMS=(2 5 10 20 50)
+LENSCALES=(0.5 1.0 3.0 5.0)
+KERNS=("rbf") # "exp" "matern32" "matern52")
 
 $(python  get_bash_dlk.py -d ${DIMS[@]} -ls ${LENSCALES[@]} -kt ${KERNS[@]} -arr $SLURM_ARRAY_TASK_ID)
 
-NU=2.5
+echo $DIM $LENSCALE $KERN
 
 N=110000
 KS=0.9
 NV=0.1
 
-ID=3
+ID=9
 
-# 1: 3 * n/nv
-# 2: 12 * n/nv
-# 3: n**3/2 / nv
+if [ $KERN == "matern32" ]; then
+  KERN="matern"
+  NU=1.5
+elif [ $KERN == "matern52" ]; then
+  KERN="matern"
+  NU=2.5
+elif [ $KERN == "matern72" ]; then
+  KERN="matern"
+  NU=3.5
+else
+  NU=-999
+fi
 
 OUTFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KERN}_dim_${DIM}_ls_${LENSCALE}_${ID}.npy" 
 

@@ -129,8 +129,15 @@ def sweep_fun(
         _Ds = lambda *args: [L]
         sampling_function = gpsampler.samplers.sample_chol_from_x
     elif method == "cg":
-        _Ds = lambda *args: [2**i for i in range(4, int(np.log2(np.sqrt(args[-1])))+1)]
+        _Ds = lambda * args: [2 ** i
+                              for i in range(
+                                  4, int(np.log2(np.sqrt(args[-1]))) + 1)]
         sampling_function = gpsampler.samplers.sample_cg_from_x
+    elif method == "sparse":
+        _Ds = lambda * args: [2 ** i
+                              for i in range(
+                                  4, int(np.log2(np.sqrt(args[-1]))) + 1)]
+        sampling_function = gpsampler.samplers.sample_sparse_from_x
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
 

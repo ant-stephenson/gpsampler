@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=10:00:00
 #SBATCH --mem-per-cpu=10G
-#SBATCH --array=0-8
+#SBATCH --array=0-35
 #SBATCH --mail-user=$USER@bristol.ac.uk
 #SBATCH --mail-type=END
 #SBATCH --output=/user/work/ll20823/mini-project/slurm/sampling/test-%j_%a.out
@@ -18,21 +18,34 @@ source slurm_init.sh
 
 echo $SLURM_JOB_START_TIME
 
-DIMS=(2 5 10)
-LENSCALES=(0.5 2.0 5.0)
-KERNS=("matern")
+DIMS=(2 5 10 20 50)
+LENSCALES=(0.5 1.0 3.0 5.0)
+KERNS=("rbf" "exp" "matern32" "matern52")
 
 $(python  get_bash_dlk.py -d ${DIMS[@]} -ls ${LENSCALES[@]} -kt ${KERNS[@]} -arr $SLURM_ARRAY_TASK_ID)
 
+echo $DIM $LENSCALE $KERN
+
+if [ $KERN == "matern32" ]; then
+  KERN="matern"
+  NU=1.5
+elif [ $KERN == "matern52" ]; then
+  KERN="matern"
+  NU=2.5
+elif [ $KERN == "matern72" ]; then
+  KERN="matern"
+  NU=3.5
+else
+  NU=-999
+fi
+
 KTRUE=$KERN
 KMODEL=$KERN
-ID=3
+ID=9
 
 if [ $KERN == "matern" ]; then
-    NU=2.5
     INFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KTRUE}_dim_${DIM}_ls_${LENSCALE}_nu_${NU}_${ID}.npy" 
 else
-    NU=-999
     INFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/output_kt_${KTRUE}_dim_${DIM}_ls_${LENSCALE}_${ID}.npy" 
 fi
 OUTFILE="${SCRIPT_DIR}/synthetic-datasets/RFF/data_test_outputs.csv" 

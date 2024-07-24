@@ -25,6 +25,10 @@ from linear_operator.utils.linear_cg import linear_cg
 from linear_operator.utils.minres import minres
 from gpytorch.utils.warnings import NumericalWarning
 
+from gpsampler.utils import msqrt
+
+from gpprediction.kernels.keops_kernels import RBFKernel
+
 # warnings.simplefilter("error")
 
 rng = np.random.default_rng(1)
@@ -306,9 +310,9 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
         raise NotImplementedError
 
 
-def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l:
-                          float, rng: np.random.Generator, D: int, G: int,
-                          nu: float) -> Tuple[NPSample, NPKernel]:
+def sample_mat_rff_from_x1(x: NPInputMat, sigma: float, noise_var: float, l:
+                           float, rng: np.random.Generator, D: int, G: int,
+                           nu: float) -> Tuple[NPSample, NPKernel]:
     n, d = x.shape
     w = rng.standard_normal((D, ))
     s = rng.gamma(shape=nu, scale=l**2/nu, size=G)
@@ -341,9 +345,9 @@ def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l:
             for p in range(parts):
                 idx = np.s_[(p*N):((p+1)*N)]
                 ys[idx], Cp = _sample_se_rff_from_x(
-                    x[idx, :], sigma, omega[:, :]/np.sqrt(ss), w)
+                    x[idx, :], sigma, omega/np.sqrt(ss), w)
         else:
-            ys, Cs = _sample_se_rff_from_x(x, sigma, omega[:, :]/np.sqrt(ss), w)
+            ys, Cs = _sample_se_rff_from_x(x, sigma, omega/np.sqrt(ss), w)
         y += ys
         C += Cs
 
@@ -352,6 +356,22 @@ def sample_mat_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l:
     noise = rng.normal(scale=np.sqrt(noise_var), size=n)
     y_noise = y + noise
     return y_noise, C
+
+
+def sample_mat_rff_from_x(x, sigma: float, noise_var: float, l:
+                          float, rng: np.random.Generator, D: int, G: int,
+                          nu: float):
+    n, d = x.shape
+    w = rng.standard_normal((D, ))
+    y, C = np.zeros(n,), np.nan
+
+    omega_y = rng.standard_normal((D//2, d)) * np.sqrt(2)/l
+    omega_u = rng.chisquare(2*nu, size=(D//2,))
+    omega = np.sqrt(2*nu/np.tile(omega_u, (d, 1)).T) * omega_y
+    y, approx_cov = _sample_se_rff_from_x(x, sigma, omega, w)
+    noise = rng.normal(scale=np.sqrt(noise_var), size=(n, ))
+    y_noise = y + noise
+    return y_noise, approx_cov
 
 
 def sample_se_rff_from_x(
@@ -511,6 +531,48 @@ def sample_ciq_from_x(x: Union[torch.Tensor, NPInputMat],
                * torch.randn(n)).detach().numpy()
     # approx_cov = estimate_ciq_kernel(x, J, Q, sigma, l)
     approx_cov = np.nan
+    return y_noise, approx_cov
+
+
+def sample_sparse_from_x(x: NPInputMat, sigma: float, noise_var: float,
+                         l: float, kernel_type: str, rng: np.random.Generator,
+                         m: int) -> Tuple[NPSample, NPKernel]:
+    n, d = x.shape
+    u = rng.standard_normal(m)
+    eta = 0.8
+
+    if kernel_type.lower() == 'rbf':
+        base_kernel = RBFKernel
+    elif kernel_type.lower() == 'exp':
+        base_kernel = gpytorch.kernels.MaternKernel(0.5)
+    elif kernel_type.lower() == 'matern32':
+        base_kernel = gpytorch.kernels.MaternKernel(1.5)
+    elif kernel_type.lower() == 'matern52':
+        base_kernel = gpytorch.kernels.MaternKernel(2.5)
+    else:
+        raise ValueError(
+            "Unsupported kernel or incorrect name. Options: 'rbf', 'exp', 'matern32', 'matern52'.")
+
+    sind = rng.choice(n, m)
+
+    inducing_points = torch.as_tensor(x[sind, :])
+    base_kernel = gpytorch.kernels.InducingPointKernel(
+        base_kernel,
+        inducing_points=inducing_points,
+        likelihood=gpytorch.likelihoods.Likelihood,
+    )
+
+    kernel = construct_kernels(
+        l, sigma, base_kernel)
+
+    rootKmm = kernel._inducing_inv_root
+    Knm = kernel(torch.as_tensor(x), inducing_points)
+
+    # TODO: use gpytorch/keops to exploit GPUs
+    # rootKmm = msqrt(kernel(inducing_points, inducing_points))
+
+    y_noise = Knm @ rootKmm @ torch.as_tensor(u)
+    approx_cov = Knm @ rootKmm @ Knm.T
     return y_noise, approx_cov
 
 

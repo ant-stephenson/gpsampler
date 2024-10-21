@@ -7,10 +7,10 @@ from gpprediction.utils import k_se, k_mat_half as k_exp, k_mat_3half
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m","--m", type=int, default=5000)
+    parser.add_argument("-m","--m", type=int, default=1000)
     parser.add_argument("-ls","--lengthscale", type=float, default=1.0)
     parser.add_argument("-d","--dimension", type=int, default=10)
-    parser.add_argument("-o","--out", type=str, default="dataset_test_output.csv")
+    parser.add_argument("-o","--out", type=str, default="dataset_test_calibration.csv")
     parser.add_argument(
         "-f","--filepath", type=str,
         default="synthetic-datasets/RFF/output_kt_exp_dim_10_ls_3.0_1.npy")
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     method = args.method
     d = args.dimension
     ls = args.lengthscale
-    nv = {"rff": 0.1, "ciq": 0.008}[method]
+    nv = {"rff": 0.1, "ciq": 0.008, "svd": 0.1}[method]
     m = args.m
     significance_threshold = args.significance
 

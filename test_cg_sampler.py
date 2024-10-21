@@ -20,6 +20,7 @@ nv = 1e-1
 
 x = np.random.randn(n,d)/np.sqrt(d)
 K = k_mat(x, x, ls=l,sigma=sigma,nu=0.5)
+K = k_se(x,x,sigma=sigma,ls=l)
 Ke = K + np.eye(n) * nv
 
 rootK = msqrt(Ke)
@@ -113,10 +114,17 @@ with ExitStack() as stack:
                 max_lanczos_iter=J, num_contour_quadrature=Q)
 yciq = (solves * weights).sum(0).squeeze()
 ciq_err = linalg.norm(yciq - y)
+print(f"CIQ sample error: {ciq_err}")
 # %% chol benchmark - note: not that good for sampling...good at reproducing Ke
 L = linalg.cholesky(Ke, lower=True)
 chol_err = linalg.norm(L @ u - y)
 print(f"Chol sample error: {chol_err}")
+#%% nystrom benchmark
+m = int(np.sqrt(n))
+uind = np.random.choice(n,m)
+Knyst = Ke[:,uind] @ invmsqrt(Ke[np.ix_(uind,uind)]) @ np.eye(m,n)
+nyst_err = linalg.norm(Knyst @ u - y)
+print(f"Nystrom sample error: {nyst_err}")
 # %% random var-matched benchmark
 print(f"Random sample error: {linalg.norm(u*np.sqrt(y.var()) - y)}")
 # %%

@@ -8,7 +8,10 @@ from scipy.special import gamma, binom
 from scipy.optimize import root, fsolve, minimize
 from scipy.integrate import quad
 
-from gpprediction.utils import k_se, k_mat_half as k_exp
+try:
+    from gpprediction.utils import k_se, k_mat_half as k_exp
+except ImportError:
+    pass  # only needed for eigenvalue-bound utilities; not used by lrff/rff sweeps
 
 
 @singledispatch

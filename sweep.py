@@ -16,7 +16,7 @@ rng = np.random.default_rng()
 
 
 def Ds(d, l, sigma, noise_var, N):
-    """ creates array of #rff to use for different experiments, based on the
+    """creates array of #rff to use for different experiments, based on the
     input size N. Maxes out at N^2
 
     Args:
@@ -35,7 +35,7 @@ def Ds(d, l, sigma, noise_var, N):
 
 
 def Js(d, l, sigma, noise_var, N):
-    """ creates array of #lanczsos iter to use for different experiments based
+    """creates array of #lanczsos iter to use for different experiments based
     on the input size N. Maxes out at N.
 
     Args:
@@ -57,39 +57,50 @@ def Js(d, l, sigma, noise_var, N):
 min_l = 1e-2
 max_l = 1.0
 
-default_param_set = {"ds": [2],  # input (x) dimensionality
-                     # np.linspace(min_l, max_l, size_l),  # length scale
-                     "ls": [1e-3, 2],
-                     "sigmas": [1.0],  # kernel scale
-                     "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(8, 13)],  # no. of data points
-                     }
-problem_param_set = {"ds": [2],  # input (x) dimensionality
-                     # np.linspace(min_l, max_l, size_l),  # length scale
-                     "ls": [0.1, 1, 2],
-                     "sigmas": [1.0],  # kernel scale
-                     "noise_vars": [1e-3],  # noise_variance
-                     "Ns": [2**i for i in range(8, 13)],  # no. of data points
-                     }
-paper_param_set = {"ds": [10],  # input (x) dimensionality
-                   # np.linspace(min_l, max_l, size_l),  # length scale
-                   "ls": [1e-1, 0.5, 1, 2],
-                   "sigmas": [1.0],  # kernel scale
-                   "noise_vars": [1e-2],  # noise_variance
-                   "Ns": [2**i for i in range(8, 13)],  # no. of data points
-                   }
+default_param_set = {
+    "ds": [2, 3],  # input (x) dimensionality
+    # np.linspace(min_l, max_l, size_l),  # length scale
+    "ls": [0.5, 2],
+    "sigmas": [1.0],  # kernel scale
+    "noise_vars": [1e-2],  # noise_variance
+    "Ns": [2**i for i in range(8, 12)],  # no. of data points
+}
+problem_param_set = {
+    "ds": [2],  # input (x) dimensionality
+    # np.linspace(min_l, max_l, size_l),  # length scale
+    "ls": [0.1, 1, 2],
+    "sigmas": [1.0],  # kernel scale
+    "noise_vars": [1e-3],  # noise_variance
+    "Ns": [2**i for i in range(8, 13)],  # no. of data points
+}
+paper_param_set = {
+    "ds": [10],  # input (x) dimensionality
+    # np.linspace(min_l, max_l, size_l),  # length scale
+    "ls": [1e-1, 0.5, 1, 2],
+    "sigmas": [1.0],  # kernel scale
+    "noise_vars": [1e-2],  # noise_variance
+    "Ns": [2**i for i in range(8, 13)],  # no. of data points
+}
 
 
 param_sets = {
     0: default_param_set.values(),
     1: problem_param_set.values(),
-    2: paper_param_set.values()}
+    2: paper_param_set.values(),
+}
 
 
 def sweep_fun(
-        tup: Tuple, method: str, csvfile: TextIO, NO_TRIALS: int, verbose: bool,
-        benchmark: bool, significance_threshold: float, with_pre: bool) -> None:
-    """ Run experiment over a tuple of parameters NO_TRIALS times, writing to a
+    tup: Tuple,
+    method: str,
+    csvfile: TextIO,
+    NO_TRIALS: int,
+    verbose: bool,
+    benchmark: bool,
+    significance_threshold: float,
+    with_pre: bool,
+) -> None:
+    """Run experiment over a tuple of parameters NO_TRIALS times, writing to a
     csvfile. Supports RFF and CIQ methods.
 
     Args:
@@ -112,9 +123,39 @@ def sweep_fun(
     # max_preconditioner_size = 0
 
     x = rng.standard_normal(size=(N, d)) / np.sqrt(d)
-    theory_cov = sigma * np.exp(-pairwise_distances(x)**2/(2*l**2))
-    theory_cov_noise = theory_cov + noise_var*np.eye(N)
+    theory_cov = sigma * np.exp(-pairwise_distances(x) ** 2 / (2 * l**2))
+    theory_cov_noise = theory_cov + noise_var * np.eye(N)
     L = linalg.cholesky(theory_cov_noise, lower=True)
+
+    # For lrff: pre-build the Nystrom sketch (K, S, B, alpha_fn) once per
+    # (N, l, noise_var) — reused across every D value and every trial.
+    # This avoids recomputing the O(N^2) kernel matrix 1000x per D value.
+    # Also compute n_eff via Hutchinson, reusing L already formed above.
+    if method == "lrff":
+        from gpsampler.leverage_reweighted_rff import (
+            kernel_matrix as _km,
+            recursive_rls as _rrls,
+            nystrom_factor as _nf,
+            ApproxLeverage as _AL,
+        )
+
+        _K_unit = _km(x, kind="rbf", ell=l)
+        _S = _rrls(_K_unit, lam=noise_var, rng=np.random.default_rng(99))
+        _B = _nf(_K_unit, _S)
+        _lrff_alpha_fn = _AL(x, _B, noise_var)
+
+        _rng_neff = np.random.default_rng(12345)
+        _neff_probes = 30
+        _neff_sum = 0.0
+        for _ in range(_neff_probes):
+            v = _rng_neff.standard_normal(N)
+            # Hutchinson: E[v^T K K_xi^{-1} v] = Tr(K K_xi^{-1})
+            # theory_cov = sigma * K_unit, so divide by sigma at the end
+            _neff_sum += np.dot(theory_cov @ v, linalg.cho_solve((L, True), v))
+        neff = _neff_sum / (_neff_probes * sigma)
+    else:
+        _lrff_alpha_fn = None
+        neff = np.nan
 
     if method == "rff":
         _Ds = Ds
@@ -124,19 +165,25 @@ def sweep_fun(
         sampling_function = partial(
             gpsampler.samplers.sample_ciq_from_x,
             Q=int(np.log(N)),
-            max_preconditioner_size=max_preconditioner_size)
+            max_preconditioner_size=max_preconditioner_size,
+        )
+    elif method == "lrff":
+        _Ds = Ds
+        sampling_function = partial(
+            gpsampler.samplers.sample_lrff_from_x, alpha_fn=_lrff_alpha_fn
+        )
     elif method == "chol":
         _Ds = lambda *args: [L]
         sampling_function = gpsampler.samplers.sample_chol_from_x
     elif method == "cg":
-        _Ds = lambda * args: [2 ** i
-                              for i in range(
-                                  4, int(np.log2(np.sqrt(args[-1]))) + 1)]
+        _Ds = lambda *args: [
+            2**i for i in range(4, int(np.log2(np.sqrt(args[-1]))) + 1)
+        ]
         sampling_function = gpsampler.samplers.sample_cg_from_x
     elif method == "sparse":
-        _Ds = lambda * args: [2 ** i
-                              for i in range(
-                                  4, int(np.log2(np.sqrt(args[-1]))) + 1)]
+        _Ds = lambda *args: [
+            2**i for i in range(4, int(np.log2(np.sqrt(args[-1]))) + 1)
+        ]
         sampling_function = gpsampler.samplers.sample_sparse_from_x
     else:
         raise ValueError("Options supported are `rff` or `ciq`")
@@ -144,9 +191,35 @@ def sweep_fun(
     errors = []
     if verbose:
         print(
-            "***d = %d, l = %.2e, sigma = %.2e, noise_var = %.2e, N = %d***" %
-            tup, flush=True)
+            "***d = %d, l = %.2e, sigma = %.2e, noise_var = %.2e, N = %d***"
+            % tup,
+            flush=True,
+        )
     for D in _Ds(*tup):
+        # For lrff: build the SIR pool once per D (O(n·r·P)), then each of the
+        # NO_TRIALS trials just does a cheap rng.choice() resample from it.
+        if method == "lrff":
+            from gpsampler.leverage_reweighted_rff import compute_sir_pool
+
+            _pool_cache = compute_sir_pool(
+                D // 2,
+                d,
+                "rbf",
+                l,
+                1.5,
+                _lrff_alpha_fn,
+                np.random.default_rng(D + 1_000_000),
+                pool_factor=5,
+                pool_min=4000,
+            )
+            _cur_sf = partial(
+                gpsampler.samplers.sample_lrff_from_x,
+                alpha_fn=_lrff_alpha_fn,
+                pool_cache=_pool_cache,
+            )
+        else:
+            _cur_sf = sampling_function
+
         avg_approx_cov = theory_cov_noise * 0
         reject = 0.0
         for j in range(NO_TRIALS):
@@ -154,11 +227,10 @@ def sweep_fun(
                 y_noise = rng.multivariate_normal(np.zeros(N), theory_cov_noise)
                 approx_cov = theory_cov_noise
             else:
-                y_noise, approx_cov = sampling_function(
-                    x, sigma, noise_var, l, rng, D)
+                y_noise, approx_cov = _cur_sf(x, sigma, noise_var, l, rng, D)
 
             spherical_y = linalg.solve_triangular(L, y_noise, lower=True)
-            res = stats.cramervonmises(spherical_y, 'norm', args=(0, 1))
+            res = stats.cramervonmises(spherical_y, "norm", args=(0, 1))
             statistic = res.statistic
             pvalue = res.pvalue
             # pvalue unreliable (see doc) if estimating params
@@ -183,22 +255,39 @@ def sweep_fun(
         if verbose:
             print("D = %d" % D, flush=True)
             print(
-                f"max_preconditioner_size={max_preconditioner_size}",
-                flush=True)
-            print("Norm difference between average approximate and exact K: %.6f" %
-                  err, flush=True)
-            print("%.2f%% rejected" % (reject*100), flush=True)
+                f"max_preconditioner_size={max_preconditioner_size}", flush=True
+            )
+            print(
+                "Norm difference between average approximate and exact K: %.6f"
+                % err,
+                flush=True,
+            )
+            print("%.2f%% rejected" % (reject * 100), flush=True)
 
-        row_str = str(tup + (D, err, reject))[1:-1]
+        if method == "lrff":
+            row_str = str(tup + (D, err, reject, neff))[1:-1]
+        else:
+            row_str = str(tup + (D, err, reject))[1:-1]
         print(row_str, file=csvfile, flush=True)
 
 
-def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
-              noise_vars: Iterable, Ns: Iterable, verbose: bool = True,
-              NO_TRIALS: int = 10, significance_threshold: float = 0.1,
-              param_index: int = 0, benchmark: bool = False, ncpus: int = 2,
-              method: str = "ciq", job_id: int = 0, with_pre: bool = False) -> None:
-    """ Runs experiments over all sets of parameters. Runs in parallel if
+def run_sweep(
+    ds: Iterable,
+    ls: Iterable,
+    sigmas: Iterable,
+    noise_vars: Iterable,
+    Ns: Iterable,
+    verbose: bool = True,
+    NO_TRIALS: int = 10,
+    significance_threshold: float = 0.1,
+    param_index: int = 0,
+    benchmark: bool = False,
+    ncpus: int = 2,
+    method: str = "ciq",
+    job_id: int = 0,
+    with_pre: bool = False,
+) -> None:
+    """Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
 
     Args:
@@ -226,23 +315,40 @@ def run_sweep(ds: Iterable, ls: Iterable, sigmas: Iterable,
         overwrite = False
 
     filepath = check_exists(
-        pathlib.Path(".").joinpath(filename),
-        ".csv", overwrite=overwrite)[0]
+        pathlib.Path(".").joinpath(filename), ".csv", overwrite=overwrite
+    )[0]
 
-    with open(filepath, 'w', newline='') as csvfile:
+    with open(filepath, "w", newline="") as csvfile:
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
+        if method == "lrff":
+            fieldnames.append("neff")
         print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
-            Parallel(
-                n_jobs=ncpus, require="sharedmem")(
-                delayed(sweep_fun)
-                (tup, method, csvfile, NO_TRIALS, verbose, benchmark,
-                 significance_threshold, with_pre)
-                for tup in product(ds, ls, sigmas, noise_vars, Ns))
+            Parallel(n_jobs=ncpus, require="sharedmem")(
+                delayed(sweep_fun)(
+                    tup,
+                    method,
+                    csvfile,
+                    NO_TRIALS,
+                    verbose,
+                    benchmark,
+                    significance_threshold,
+                    with_pre,
+                )
+                for tup in product(ds, ls, sigmas, noise_vars, Ns)
+            )
         else:
             for tup in product(ds, ls, sigmas, noise_vars, Ns):
-                sweep_fun(tup, method, csvfile, NO_TRIALS, verbose,
-                          benchmark, significance_threshold, with_pre)
+                sweep_fun(
+                    tup,
+                    method,
+                    csvfile,
+                    NO_TRIALS,
+                    verbose,
+                    benchmark,
+                    significance_threshold,
+                    with_pre,
+                )
 
 
 if __name__ == "__main__":

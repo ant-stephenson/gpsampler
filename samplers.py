@@ -20,14 +20,20 @@ import copy
 
 import torch
 
-from linear_operator.utils.broadcasting import _matmul_broadcast_shape
-from linear_operator.utils.linear_cg import linear_cg
-from linear_operator.utils.minres import minres
+try:
+    from linear_operator.utils.broadcasting import _matmul_broadcast_shape
+    from linear_operator.utils.linear_cg import linear_cg
+    from linear_operator.utils.minres import minres
+except ImportError:
+    pass  # only needed for CIQ sampler; lrff/rff paths work without it
 from gpytorch.utils.warnings import NumericalWarning
 
 from gpsampler.utils import msqrt
 
-from gpprediction.kernels.keops_kernels import RBFKernel
+try:
+    from gpprediction.kernels.keops_kernels import RBFKernel
+except ImportError:
+    pass  # only needed for KeOps-based CIQ sampler
 
 # warnings.simplefilter("error")
 
@@ -308,6 +314,47 @@ def sample_rff_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
         return sample_lap_rff_from_x(x, sigma, noise_var, l, rng, D)
     else:
         raise NotImplementedError
+
+
+def sample_lrff_from_x(
+        x: NPInputMat, sigma: float, noise_var: float, l: float,
+        rng: np.random.Generator, D: int, kernel_type: str = "rbf",
+        **kwargs) -> Tuple[NPSample, NPKernel]:
+    """Leverage-reweighted RFF sample at points x.  Same external interface as
+    sample_rff_from_x so the same sweep harness (sweep.py) drives both methods.
+
+    D is the total number of RFF features (D = 2 * n_freq, must be even).
+    The outputscale sigma and noise variance noise_var match sample_se_rff_from_x:
+      - Phi from reweighted_rff_sampler has k(0)=1 (no sigma); scaled by sqrt(sigma)
+        so that Cov(y_noisefree) ≈ sigma * K_RBF.
+      - Additive noise ε ~ N(0, noise_var · I) is drawn with the same rng.
+
+    Note: reweighted_rff_sampler forms the full n×n kernel matrix K for the
+    Nyström sketch — O(n²) cost identical to the whitening step already done by
+    the harness.  No additional O(n³) work is introduced beyond what the harness
+    already performs.
+    """
+    from gpsampler.leverage_reweighted_rff import reweighted_rff_sampler
+    n = x.shape[0]
+    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
+    nu = kwargs.get("nu", 1.5)
+    n_freq = D // 2
+    # Build the (n, D) feature matrix.  leverage_reweighted_rff normalises so
+    # that Phi @ Phi^T ≈ K with k(0)=1; sigma is applied below.
+    Phi = reweighted_rff_sampler(
+        X=x, kind=kind, ell=l, nu=nu, sigma2=noise_var,
+        n_freq=n_freq, rng=rng,
+        alpha_fn=kwargs.get("alpha_fn"),
+        pool_factor=kwargs.get("pool_factor", 5),
+        pool_cache=kwargs.get("pool_cache"))
+    # Apply output scale so Cov(y) ≈ sigma * K
+    Phi = Phi * np.sqrt(sigma)
+    # Draw prior sample: z ~ N(0, I_D), y = Phi z
+    z = rng.standard_normal(Phi.shape[1])
+    y = Phi @ z
+    # Add observation noise, identical convention to sample_se_rff_from_x
+    y_noise = y + rng.normal(scale=np.sqrt(noise_var), size=(n,))
+    return y_noise, np.nan
 
 
 def sample_mat_rff_from_x1(x: NPInputMat, sigma: float, noise_var: float, l:

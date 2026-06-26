@@ -240,7 +240,7 @@ def sample_chol_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
 def sample_cg_from_x(x: NPInputMat, sigma: float, noise_var: float, l: float,
                      rng: np.random.Generator, m: int) -> Tuple[NPSample, NPKernel]:
     from scipy.sparse import diags
-    from gpytools.maths import invmsqrt
+    from gpsampler.maths import invmsqrt
     n, d = x.shape
     z = rng.standard_normal(n)
     y0 = np.zeros(n)
@@ -347,11 +347,13 @@ def sample_lrff_from_x(
         alpha_fn=kwargs.get("alpha_fn"),
         pool_factor=kwargs.get("pool_factor", 5),
         pool_cache=kwargs.get("pool_cache"))
-    # Apply output scale so Cov(y) ≈ sigma * K
-    Phi = Phi * np.sqrt(sigma)
+    # Apply output scale so Cov(y) ≈ sigma * K.
+    # Keep Phi in float32 to avoid upcasting to float64 (halves peak memory).
+    Phi = Phi * np.float32(np.sqrt(sigma))
     # Draw prior sample: z ~ N(0, I_D), y = Phi z
-    z = rng.standard_normal(Phi.shape[1])
-    y = Phi @ z
+    # z is float32 to avoid upcasting Phi; y will be float64 after noise addition.
+    z = rng.standard_normal(Phi.shape[1]).astype(np.float32)
+    y = (Phi @ z).astype(np.float64)
     # Add observation noise, identical convention to sample_se_rff_from_x
     y_noise = y + rng.normal(scale=np.sqrt(noise_var), size=(n,))
     return y_noise, np.nan

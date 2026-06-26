@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import numpy as np
-from gpybench.datasets import sample_with_correlation
-from gpybench.utils import temp_seed
-import gpytools.maths as gm
+from gpsampler.datasets import sample_with_correlation
+from gpsampler.utils import temp_seed
+import gpsampler.maths as gm
 import gpytorch
 import torch
 

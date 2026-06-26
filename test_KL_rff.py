@@ -1,11 +1,11 @@
 #%%
 from numpy.linalg.linalg import _assert_finite
 from numpy.testing._private.utils import assert_array_less
-from gpybench import datasets as ds
-from gpybench.utils import get_off_diagonal, numpify, print_mean_std
-from gpybench.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
-from gpytools.maths import safe_logdet, Tr
-from gpytools.utils import check_bounds
+import gpsampler.datasets as ds
+from gpsampler.utils import get_off_diagonal, numpify, print_mean_std
+from gpsampler.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
+from gpsampler.maths import safe_logdet, Tr
+from gpsampler.utils import check_bounds
 import gpytorch
 import torch
 import numpy as np

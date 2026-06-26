@@ -58,8 +58,8 @@ print(n_min)
 fun3 = lambda logn: 3/4 * logn - np.sqrt(np.exp(logn)) * (1-B(d,l)) - np.log(mineig(logn)/4)
 np.exp(fsolve(fun3, np.log(1000)))
 # %% test preconditioning at large l
-from gpytools.maths import id_inv
-from gpybench.datasets import sample_rbf_kernel
+from gpsampler.maths import id_inv
+from gpsampler.datasets import sample_rbf_kernel
 
 d = 10
 ms = np.arange(250,2000,250)
@@ -85,7 +85,7 @@ for i,m in enumerate(ms):
 
 #%%
 import matplotlib.pyplot as plt
-import gpybench.plotting as gplt
+import gpsampler.plotting as gplt
 from pathlib import Path
 
 # np.set_printoptions(formatter={'float_kind':float_formatter})

@@ -2,9 +2,8 @@
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from gpybench.plotting import save_fig, LaTeX
-from gpybench.utils import isnotebook
-from gpytools.utils import ordermag
+from gpsampler.plotting import save_fig, LaTeX
+from gpsampler.utils import isnotebook, ordermag
 from pathlib import Path
 import warnings
 
@@ -58,9 +57,9 @@ def import_data(method, job_id, param_idx, with_pre):
 
 
 # %% get data
-method = "rff"
-job_id = 2580211  # 2703849#2580211#2686645#
-param_idx = 1
+method = "lrff"
+job_id = 17903345  # 2580211  # 2703849#2580211#2686645#
+param_idx = 2
 with_pre = False
 chol_sweep, _, _ = import_data("chol", 5, 2, None)
 sweep, order_f, fidel_param = import_data(method, job_id, param_idx, with_pre)

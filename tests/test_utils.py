@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import numpy as np
-import gpybench.datasets as ds
-import gpytools.maths as gm
+import gpsampler.datasets as ds
+import gpsampler.maths as gm
 import gpytorch
 import torch
 from scipy.special import gamma, binom

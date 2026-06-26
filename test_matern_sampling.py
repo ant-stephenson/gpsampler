@@ -1,6 +1,6 @@
 import numpy as np
 from gpsampler.samplers import sample_se_rff_from_x, zrf, f_rf, sample_rff_from_x, _sample_se_rff_from_x
-from gpytools.maths import k_mat, msqrt
+from gpsampler.maths import k_mat, msqrt
 import matplotlib.pyplot as plt
 
 n,d = 200,2

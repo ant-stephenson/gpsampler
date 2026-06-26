@@ -3,10 +3,10 @@ from pytest import MonkeyPatch
 from unittest.mock import patch, MagicMock
 from pytest_mock import mocker
 import numpy as np
-from gpybench.datasets import sample_with_correlation
-from gpybench.utils import temp_seed
+from gpsampler.datasets import sample_with_correlation
+from gpsampler.utils import temp_seed
 
-import gpytools.maths as gm
+import gpsampler.maths as gm
 import gpytorch
 import torch
 import numpy as np

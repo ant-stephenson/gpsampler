@@ -1,9 +1,9 @@
 #%%
-from gpybench import datasets as ds
-from gpybench.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
-from gpybench.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
-import gpytools.maths as gm
-import gpybench.plotting as gplt
+import gpsampler.datasets as ds
+from gpsampler.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
+from gpsampler.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
+import gpsampler.maths as gm
+import gpsampler.plotting as gplt
 import gpytorch
 import torch
 import numpy as np

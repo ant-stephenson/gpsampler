@@ -2,9 +2,9 @@
 from scipy import linalg
 import gpytorch
 import torch
-from gpybench.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
-from gpytools.maths import estimate_rff_kernel, estimate_rff_kernel_inv, f_gp_approx, low_rank_inv_approx, msqrt,invmsqrt, k_se, k_mat
-import gpybench.plotting as gplt
+from gpsampler.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
+from gpsampler.maths import estimate_rff_kernel, estimate_rff_kernel_inv, f_gp_approx, low_rank_inv_approx, msqrt, invmsqrt, k_se, k_mat
+import gpsampler.plotting as gplt
 import gpsampler
 import numpy as np
 import matplotlib.pyplot as plt

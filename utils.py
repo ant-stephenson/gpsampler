@@ -1,12 +1,14 @@
 import pathlib
 import re
+import contextlib
 import numpy as np
 import torch
-from functools import singledispatch
-from typing import Tuple
+from functools import singledispatch, wraps
+from typing import Tuple, Callable, Union
 from scipy.special import gamma, binom
 from scipy.optimize import root, fsolve, minimize
 from scipy.integrate import quad
+from scipy import linalg
 
 try:
     from gpprediction.utils import k_se, k_mat_half as k_exp
@@ -336,3 +338,102 @@ def msqrt_torch(M: torch.Tensor) -> torch.Tensor:
     U, s, V = torch.linalg.svd(M)
     Msqrt = U @ torch.diag(torch.sqrt(s)) @ V
     return Msqrt
+
+
+# ---------------------------------------------------------------------------
+# Ported from gpybench.utils
+# ---------------------------------------------------------------------------
+
+def tensify(func: Callable[..., np.ndarray]) -> Callable[..., torch.Tensor]:
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        return torch.tensor(func(*args, **kwargs))
+    return wrapped
+
+def isnotebook():
+    try:
+        shell = get_ipython().__class__.__name__
+        if shell == "ZMQInteractiveShell":
+            return True   # Jupyter notebook or qtconsole
+        elif shell == "TerminalInteractiveShell":
+            return False  # Terminal running IPython
+        else:
+            return False
+    except NameError:
+        return False
+
+
+@contextlib.contextmanager
+def temp_seed(seed):
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
+
+
+def get_off_diagonal(a: np.ndarray) -> np.ndarray:
+    n, m = a.shape
+    if n != m:
+        raise TypeError("Array must be square.")
+    return a[np.where(~np.eye(n, dtype=bool))]
+
+
+@singledispatch
+def numpify(func: Callable[..., torch.Tensor]) -> Callable[..., np.ndarray]:
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        return func(*args, **kwargs).detach().numpy()
+    return wrapped
+
+
+@numpify.register
+def numpify_tensor(input: torch.Tensor) -> np.ndarray:
+    return input.detach().numpy()
+
+
+def print_mean_std(a, axis, labels=None):
+    mean = a.mean(axis=axis)
+    std = a.std(axis=axis)
+    prt_str = ""
+    for i in range(len(mean)):
+        l = f"{labels[i]}:" if labels is not None else ""
+        prt_str += f"{l} {mean[i]: .02f}±{std[i] : .02f}\n"
+    print(prt_str)
+    print(f"min: {a.min(): .02f}")
+
+
+# ---------------------------------------------------------------------------
+# Ported from gpytools.utils
+# ---------------------------------------------------------------------------
+
+def ordermag(x):
+    order = int(np.log10(x))
+    return 10 ** order
+
+
+def round_ordermag(x, method=np.round, astype=int):
+    order = np.floor(np.log10(x))
+    dec = x / 10 ** order
+    return (method(dec) * 10 ** order).astype(astype)
+
+
+def check_bounds(x, x_lower, x_upper, warn_mode=False) -> None:
+    print(f"{x_lower: .4g} <= {x: .4g} <= {x_upper: .4g}")
+    try:
+        np.testing.assert_array_less(x_lower, x)
+    except AssertionError as ael:
+        if warn_mode:
+            import warnings
+            warnings.warn(str(ael))
+        else:
+            raise ael
+    try:
+        np.testing.assert_array_less(x, x_upper)
+    except AssertionError as aeu:
+        if warn_mode:
+            import warnings
+            warnings.warn(str(aeu))
+        else:
+            raise aeu

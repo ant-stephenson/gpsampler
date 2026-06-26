@@ -1,11 +1,11 @@
 #%%
 from scipy import linalg
 from numpy.testing._private.utils import assert_array_less
-from gpybench import datasets as ds
-from gpybench.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
-from gpybench.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
-from gpytools.maths import safe_logdet, Tr, partial_svd_inv, low_rank_inv_approx, k_true, zrf, estimate_rff_kernel, estimate_rff_kernel_inv, f_gp_approx, am, msqrt, k_se
-import gpybench.plotting as gplt
+import gpsampler.datasets as ds
+from gpsampler.utils import get_off_diagonal, numpify, print_mean_std, isnotebook
+from gpsampler.metrics import wasserstein, kl_div_1d, nll, roberts, zscore
+from gpsampler.maths import safe_logdet, Tr, partial_svd_inv, low_rank_inv_approx, k_true, zrf, estimate_rff_kernel, estimate_rff_kernel_inv, f_gp_approx, am, msqrt, k_se
+import gpsampler.plotting as gplt
 import gpytorch
 from gpytorch.utils import contour_integral_quad
 import torch
@@ -215,8 +215,8 @@ data = gpsampler.generate_ciq_data(1000, np.ones(3), np.ones(3), 0.1, 0.9, 1.0, 
 
 #%% - plot J as a function of C and d for theoretical prediction based on
 #preconditioning
-from gpybench.plotting import contourplot
-from gpytools.utils import round_ordermag
+from gpsampler.plotting import contourplot
+from gpsampler.utils import round_ordermag
 c = np.linspace(1e-3,10,100)
 d = range(1,100)
 fig, ax = plt.subplots(2,2)

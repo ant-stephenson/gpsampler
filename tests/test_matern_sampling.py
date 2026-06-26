@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
-from gpybench.datasets import sample_with_correlation
-from gpybench.utils import temp_seed
-from gpytools.maths import k_mat, msqrt
+from gpsampler.datasets import sample_with_correlation
+from gpsampler.utils import temp_seed
+from gpsampler.maths import k_mat, msqrt
 from gpsampler.samplers import sample_mat_rff_from_x
 
 n,d = 200,2

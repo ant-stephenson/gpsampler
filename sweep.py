@@ -179,7 +179,15 @@ def sweep_fun(
         _Ds = lambda *args: [
             2**i for i in range(4, int(np.log2(np.sqrt(args[-1]))) + 1)
         ]
-        sampling_function = gpsampler.samplers.sample_cg_from_x
+        if with_pre and max_preconditioner_size > 0:
+            _pre = gpsampler.NystromPreconditioner(
+                theory_cov, eta=0.8, noise_var=noise_var,
+                rank=max_preconditioner_size, rng=rng)
+            sampling_function = partial(
+                gpsampler.samplers.sample_lanczos_from_x,
+                preconditioner=_pre)
+        else:
+            sampling_function = gpsampler.samplers.sample_cg_from_x
     elif method == "sparse":
         _Ds = lambda *args: [
             2**i for i in range(4, int(np.log2(np.sqrt(args[-1]))) + 1)

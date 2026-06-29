@@ -12,6 +12,10 @@ if __name__ == "__main__":
     parser.add_argument("--method", default="rff", type=str)
     # run ciq with preconditioning
     parser.add_argument("--pre", default=True, type=bool)
+    parser.add_argument("--bv", action="store_true", default=False,
+                        help="Run Bayes validation (TV via Imhof) alongside CvM test")
+    parser.add_argument("--bv_delta", default=0.05, type=float,
+                        help="High-probability level for TV quantile column (default 0.05 → q95)")
 
     args = parser.parse_args()
 
@@ -31,4 +35,6 @@ if __name__ == "__main__":
         ncpus=args.ncpus,
         method=args.method,
         with_pre=args.pre,
+        bv=args.bv,
+        bv_delta=args.bv_delta,
     )

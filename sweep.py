@@ -10,6 +10,35 @@ import pathlib
 
 import gpsampler
 
+
+# ---------------------------------------------------------------------------
+# Bayesian-validation helper  (reuses the Cholesky factor already held by
+# sweep_fun, so we don't pay for a second O(N³) factorisation per trial)
+# ---------------------------------------------------------------------------
+
+def _bv_tv(L_xi: np.ndarray, Khat_xi: np.ndarray) -> float:
+    """Total variation between N(0, K_ξ) and N(0, K̂_ξ) via Imhof (1961).
+
+    Parameters
+    ----------
+    L_xi   : lower-triangular Cholesky factor of K_ξ  (already computed by caller)
+    Khat_xi: realised observation covariance K̂_ξ
+
+    Returns
+    -------
+    float in [0, 1]
+    """
+    from gpsampler.bayes_validation import imhof_sf
+    from scipy.linalg import solve_triangular as _stri, eigvalsh as _eigh
+    Linv_Khat = _stri(L_xi, Khat_xi, lower=True)
+    A = _stri(L_xi, Linv_Khat.T, lower=True).T
+    lambdas = np.maximum(_eigh(A), 1e-300)
+    a = 0.5 * (1.0 - 1.0 / lambdas)
+    b = 0.5 * float(np.sum(np.log(lambdas)))
+    p1, _ = imhof_sf(a, b)
+    p2, _ = imhof_sf(a * lambdas, b)
+    return float(np.clip(p2 - p1, 0.0, 1.0))
+
 rng = np.random.default_rng()
 
 # no. of fourier features, can depend on other params
@@ -99,6 +128,8 @@ def sweep_fun(
     benchmark: bool,
     significance_threshold: float,
     with_pre: bool,
+    bv: bool = False,
+    bv_delta: float = 0.05,
 ) -> None:
     """Run experiment over a tuple of parameters NO_TRIALS times, writing to a
     csvfile. Supports RFF and CIQ methods.
@@ -230,10 +261,43 @@ def sweep_fun(
 
         avg_approx_cov = theory_cov_noise * 0
         reject = 0.0
+        tv_values: list = []
         for j in range(NO_TRIALS):
+            Khat_xi = None  # set below for BV-supported methods
+
             if benchmark:
                 y_noise = rng.multivariate_normal(np.zeros(N), theory_cov_noise)
                 approx_cov = theory_cov_noise
+                if bv:
+                    Khat_xi = theory_cov_noise
+            elif bv and method == "rff":
+                # Inline RFF sampling: capture Phi to build K̂_ξ = ΦΦᵀ + σ²I
+                omega = rng.multivariate_normal(np.zeros(d), np.eye(d) / l**2, D // 2)
+                v = x @ omega.T
+                Z = np.sqrt(2.0 / D) * np.concatenate(
+                    [np.cos(v), np.sin(v)], axis=1)
+                Phi = np.sqrt(sigma) * Z                     # (N, D)
+                w = rng.standard_normal(D)
+                y_noise = Phi @ w + rng.standard_normal(N) * np.sqrt(noise_var)
+                approx_cov = np.nan
+                Khat_xi = Phi @ Phi.T + noise_var * np.eye(N)
+            elif bv and method == "lrff":
+                # Inline lrff sampling: capture Phi for BV
+                from gpsampler.leverage_reweighted_rff import (
+                    reweighted_rff_sampler as _rrff,
+                )
+                Phi32 = np.asarray(_rrff(
+                    X=x, kind="rbf", ell=l, nu=1.5, sigma2=noise_var,
+                    n_freq=D // 2, rng=rng,
+                    alpha_fn=_lrff_alpha_fn,
+                    pool_cache=_pool_cache,
+                ), dtype=np.float32) * np.float32(np.sqrt(sigma))
+                z32 = rng.standard_normal(Phi32.shape[1]).astype(np.float32)
+                y_noise = (Phi32 @ z32).astype(np.float64) + \
+                          rng.standard_normal(N) * np.sqrt(noise_var)
+                approx_cov = np.nan
+                Phi64 = np.asarray(Phi32, dtype=np.float64)
+                Khat_xi = Phi64 @ Phi64.T + noise_var * np.eye(N)
             else:
                 y_noise, approx_cov = _cur_sf(x, sigma, noise_var, l, rng, D)
 
@@ -248,6 +312,10 @@ def sweep_fun(
                 approx_cov = approx_cov * avg_approx_cov
             avg_approx_cov += approx_cov
 
+            # Bayes validation: compute TV from realised covariance
+            if Khat_xi is not None:
+                tv_values.append(_bv_tv(L, Khat_xi))
+
         # record variance as well as mean?
         reject /= NO_TRIALS
         avg_approx_cov /= NO_TRIALS
@@ -256,6 +324,10 @@ def sweep_fun(
         else:
             err = linalg.norm(theory_cov_noise - avg_approx_cov)
         errors.append(err)
+
+        # BV aggregate statistics
+        tv_mean = float(np.mean(tv_values)) if tv_values else np.nan
+        tv_q = float(np.quantile(tv_values, 1.0 - bv_delta)) if tv_values else np.nan
 
         if method == "chol":
             D = -999
@@ -271,11 +343,18 @@ def sweep_fun(
                 flush=True,
             )
             print("%.2f%% rejected" % (reject * 100), flush=True)
+            if bv and not np.isnan(tv_mean):
+                print(
+                    f"TV mean={tv_mean:.4f}  TV q{int((1-bv_delta)*100)}={tv_q:.4f}",
+                    flush=True,
+                )
 
+        base = tup + (D, err, reject)
         if method == "lrff":
-            row_str = str(tup + (D, err, reject, neff))[1:-1]
-        else:
-            row_str = str(tup + (D, err, reject))[1:-1]
+            base = tup + (D, err, reject, neff)
+        if bv:
+            base = base + (tv_mean, tv_q)
+        row_str = str(base)[1:-1]
         print(row_str, file=csvfile, flush=True)
 
 
@@ -294,6 +373,8 @@ def run_sweep(
     method: str = "ciq",
     job_id: int = 0,
     with_pre: bool = False,
+    bv: bool = False,
+    bv_delta: float = 0.05,
 ) -> None:
     """Runs experiments over all sets of parameters. Runs in parallel if
     specified. Calls sweep_fun() for each parameter set.
@@ -312,14 +393,15 @@ def run_sweep(
         ncpus (int, optional): Number of CPUs to use. Defaults to 2.
         method (str, optional): "rff" or "ciq". Defaults to "ciq".
     """
+    bv_suffix = "_bv" if bv else ""
     if __name__ == "__main__":
-        filename = f"output_sweep_{method}_{param_index}_{job_id}_TEST.csv"
+        filename = f"output_sweep_{method}_{param_index}_{job_id}_TEST{bv_suffix}.csv"
         overwrite = True
     else:
         if benchmark:
-            filename = f"output_sweep_{method}_{param_index}_{job_id}_bench.csv"
+            filename = f"output_sweep_{method}_{param_index}_{job_id}_bench{bv_suffix}.csv"
         else:
-            filename = f"output_sweep_{method}_{param_index}_{job_id}.csv"
+            filename = f"output_sweep_{method}_{param_index}_{job_id}{bv_suffix}.csv"
         overwrite = False
 
     filepath = check_exists(
@@ -330,6 +412,9 @@ def run_sweep(
         fieldnames = ["d", "l", "sigma", "noise_var", "N", "D", "err", "reject"]
         if method == "lrff":
             fieldnames.append("neff")
+        if bv:
+            tv_pct = int((1.0 - bv_delta) * 100)
+            fieldnames += ["tv_mean", f"tv_q{tv_pct}"]
         print(",".join(fieldnames), file=csvfile, flush=True)
         if ncpus > 1:
             Parallel(n_jobs=ncpus, require="sharedmem")(
@@ -342,6 +427,8 @@ def run_sweep(
                     benchmark,
                     significance_threshold,
                     with_pre,
+                    bv,
+                    bv_delta,
                 )
                 for tup in product(ds, ls, sigmas, noise_vars, Ns)
             )
@@ -356,6 +443,8 @@ def run_sweep(
                     benchmark,
                     significance_threshold,
                     with_pre,
+                    bv,
+                    bv_delta,
                 )
 
 

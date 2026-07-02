@@ -42,7 +42,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from scipy import linalg
+import scipy.linalg as linalg
 
 # ---------------------------------------------------------------------------
 # Repo imports
@@ -238,6 +238,8 @@ def _sweep_config(
     R: int,
     n_fidelity: int,
     verbose: bool = True,
+    dtype: type = np.float64,
+    chunk_size: int = 512,
 ) -> list[dict]:
     """Run BV sweep for one (method, n, ν, ℓ, d) configuration.
 
@@ -308,16 +310,26 @@ def _sweep_config(
 
             # --- build K̂_xi ---
             if method == "rff":
-                if kind == "rbf":
-                    omega = trial_rng.multivariate_normal(
-                        np.zeros(d), np.eye(d) / ell ** 2, fid // 2)
-                else:
-                    g = trial_rng.standard_normal((fid // 2, d))
-                    u = trial_rng.chisquare(2.0 * nu_eff, size=(fid // 2, 1))
-                    omega = (g / ell) * np.sqrt(2.0 * nu_eff / u)
-                v = x @ omega.T
-                Z = np.sqrt(2.0 / fid) * np.concatenate([np.cos(v), np.sin(v)], axis=1)
-                Khat_xi = realised_cov_rff(np.sqrt(sigma) * Z, noise_var)
+                # Chunked ΦΦᵀ: accumulate (2σ/D)·Σ_b [cos(vb)cos(vb)ᵀ + sin(vb)sin(vb)ᵀ]
+                # without ever materialising the n×D feature matrix.
+                half = fid // 2
+                # K_acc always float64: n×n is cheap; float32 accumulation of
+                # many outer products causes compounding rounding errors.
+                # dtype only controls the large per-chunk (n×b) intermediates.
+                K_acc = np.zeros((n, n), dtype=np.float64)
+                for start in range(0, half, chunk_size):
+                    b = min(chunk_size, half - start)
+                    if kind == "rbf":
+                        omega_b = trial_rng.multivariate_normal(
+                            np.zeros(d), np.eye(d) / ell ** 2, b)
+                    else:
+                        g = trial_rng.standard_normal((b, d))
+                        u = trial_rng.chisquare(2.0 * nu_eff, size=(b, 1))
+                        omega_b = (g / ell) * np.sqrt(2.0 * nu_eff / u)
+                    v = (x @ omega_b.T).astype(dtype)   # (n, b) — dtype controls memory
+                    cv, sv = np.cos(v), np.sin(v)
+                    K_acc += cv @ cv.T + sv @ sv.T      # numpy upcasts to float64
+                Khat_xi = (2.0 * sigma / fid) * K_acc + noise_var * np.eye(n)
 
             elif method == "lrff":
                 assert lrff_alpha_fn is not None
@@ -412,6 +424,8 @@ def run_sweep(
     outdir: pathlib.Path = _DEFAULT_OUTDIR,
     verbose: bool = True,
     tag: str = "",
+    dtype: type = np.float64,
+    chunk_size: int = 512,
 ) -> pathlib.Path:
     """Run the full BV comparison sweep and persist results.
 
@@ -494,6 +508,8 @@ def run_sweep(
                         R=R,
                         n_fidelity=n_fidelity,
                         verbose=verbose,
+                        dtype=dtype,
+                        chunk_size=chunk_size,
                     )
                     all_rows.extend(rows)
 
@@ -542,6 +558,14 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-config progress output."
     )
+    parser.add_argument(
+        "--dtype", choices=["float32", "float64"], default="float64",
+        help="Dtype for RFF feature computation (float32 halves per-chunk memory).",
+    )
+    parser.add_argument(
+        "--chunk_size", type=int, default=512,
+        help="Frequencies per chunk in RFF Khat accumulation (default 512).",
+    )
     return parser.parse_args(argv)
 
 
@@ -574,5 +598,7 @@ if __name__ == "__main__":
         outdir=args.outdir,
         verbose=not args.quiet,
         tag=tag,
+        dtype=np.float32 if args.dtype == "float32" else np.float64,
+        chunk_size=args.chunk_size,
     )
     print(f"Output: {out}")

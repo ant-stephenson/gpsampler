@@ -44,7 +44,14 @@ METHOD=${METHODS[$SLURM_ARRAY_TASK_ID]}
 # Input dimension: default 1; override with --export=ALL,D=2
 D=${D:-1}
 
-echo "Task $SLURM_ARRAY_TASK_ID: method=$METHOD  d=$D"
+# dtype and chunk_size: control RFF memory usage
+#   DTYPE=float32 halves per-chunk intermediate memory (cos/sin arrays)
+#   CHUNK_SIZE controls frequencies processed per chunk (default 512)
+# Example: sbatch --export=ALL,D=1,DTYPE=float32,CHUNK_SIZE=1024 run_matern_bayes.sh
+DTYPE=${DTYPE:-float64}
+CHUNK_SIZE=${CHUNK_SIZE:-512}
+
+echo "Task $SLURM_ARRAY_TASK_ID: method=$METHOD  d=$D  dtype=$DTYPE  chunk_size=$CHUNK_SIZE"
 date
 
 python -m sweeps.matern_bayes.run_sweep \
@@ -52,7 +59,9 @@ python -m sweeps.matern_bayes.run_sweep \
     --d "$D" \
     --seed 42 \
     --outdir "$OUTDIR" \
-    --tag "d${D}_${METHOD}"
+    --tag "d${D}_${METHOD}" \
+    --dtype "$DTYPE" \
+    --chunk_size "$CHUNK_SIZE"
 
 echo "Done: method=$METHOD  d=$D"
 date

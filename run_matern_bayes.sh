@@ -1,14 +1,17 @@
 #!/bin/bash
 
 #SBATCH --job-name=matern_bayes
+#SBATCH --output=/user/work/ll20823/mini-project/slurm/matern_bayes/%x.%j.out
+#SBATCH --error=/user/work/ll20823/mini-project/slurm/matern_bayes/%x.%j.err
 #SBATCH --partition=compute
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mem-per-cpu=16G
 #SBATCH --array=1-5
+#SBATCH --account=math038284
 
 # ---------------------------------------------------------------------------
 # Matérn Bayes-decision comparison — Stage 1 sweep (HPC, array over methods)
@@ -28,14 +31,12 @@
 #   sbatch --export=ALL,D=2 run_matern_bayes.sh
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR=/user/work/ll20823/gpsampler
+SCRIPT_DIR=/user/work/ll20823/mini-project/gpsampler
 OUTDIR=$SCRIPT_DIR/sweeps/matern_bayes/output
 
-source $SCRIPT_DIR/projenv/bin/activate
+module load languages/python/3.8.20
 
-module load lang/python/anaconda/3.8.5-2021-AM
-
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/sw/lang/anaconda.3.8.5-2021-AM/lib
+source $SCRIPT_DIR/.ve38/bin/activate
 
 # Map array task ID → method (1-indexed)
 METHODS=("" "rff" "lrff" "ciq" "pciq" "elrff")

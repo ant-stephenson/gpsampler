@@ -1,6 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=matern_bayes_merge
+#SBATCH --output=/user/work/ll20823/mini-project/slurm/matern_bayes_merge/%x.%j.out
+#SBATCH --error=/user/work/ll20823/mini-project/slurm/matern_bayes_merge/%x.%j.err
 #SBATCH --partition=compute
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -18,14 +20,12 @@
 # Optional: set D and TAG to match the array job (defaults: D=1, TAG=merged)
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR=/user/work/ll20823/gpsampler
+SCRIPT_DIR=/user/work/ll20823/mini-project/gpsampler
 OUTDIR=$SCRIPT_DIR/sweeps/matern_bayes/output
 
-source $SCRIPT_DIR/projenv/bin/activate
+module load languages/python/3.8.20
 
-module load lang/python/anaconda/3.8.5-2021-AM
-
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/sw/lang/anaconda.3.8.5-2021-AM/lib
+source $SCRIPT_DIR/.ve38/bin/activate
 
 D=${D:-1}
 TAG=${TAG:-merged}

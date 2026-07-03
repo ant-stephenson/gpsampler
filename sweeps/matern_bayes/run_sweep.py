@@ -56,7 +56,6 @@ if str(_REPO_ROOT) not in sys.path:
 from gpsampler.maths import k_se, k_mat
 from gpsampler.bayes_validation import (
     gaussian_bayes_error,
-    realised_cov_rff,
     realised_cov_ciq,
 )
 from gpsampler.samplers import matsqrt, NystromPreconditioner
@@ -66,7 +65,7 @@ from gpsampler.leverage_reweighted_rff import (
     nystrom_factor as _nf,
     ApproxLeverage as _AL,
     compute_sir_pool,
-    reweighted_rff_sampler,
+    resample_from_pool,
 )
 
 from .config import (
@@ -332,13 +331,25 @@ def _sweep_config(
                 Khat_xi = (2.0 * sigma / fid) * K_acc + noise_var * np.eye(n)
 
             elif method == "lrff":
-                assert lrff_alpha_fn is not None
-                Phi = reweighted_rff_sampler(
-                    X=x, kind=kind, ell=ell, nu=nu_eff, sigma2=noise_var,
-                    n_freq=fid // 2, rng=trial_rng, alpha_fn=lrff_alpha_fn,
-                    pool_cache=lrff_pool_cache,
-                )
-                Khat_xi = realised_cov_rff(np.asarray(Phi) * np.sqrt(sigma), noise_var)
+                # Chunked weighted ΦΦᵀ: K̂_ξ = σ·Σ_b [(g_b⊙cos_b)(g_b⊙cos_b)ᵀ
+                #                                    + (g_b⊙sin_b)(g_b⊙sin_b)ᵀ] + σ²I
+                # g_j = sqrt(Z_hat / (n_freq · α_j)) are the importance weights.
+                assert lrff_alpha_fn is not None and lrff_pool_cache is not None
+                n_freq = fid // 2
+                _pool, _a_pool, _Z_hat = lrff_pool_cache
+                W, alpha_sel, Z_hat = resample_from_pool(
+                    _pool, _a_pool, _Z_hat, n_freq, trial_rng)
+                g = np.sqrt(Z_hat / (n_freq * alpha_sel))  # (n_freq,) importance weights
+                K_acc = np.zeros((n, n), dtype=np.float64)
+                for start in range(0, n_freq, chunk_size):
+                    b = min(chunk_size, n_freq - start)
+                    W_b = W[start:start + b]
+                    g_b = g[start:start + b]
+                    v = (x @ W_b.T).astype(dtype)          # (n, b)
+                    cv_w = (np.cos(v) * g_b).astype(dtype)
+                    sv_w = (np.sin(v) * g_b).astype(dtype)
+                    K_acc += cv_w @ cv_w.T + sv_w @ sv_w.T  # upcasts to float64
+                Khat_xi = sigma * K_acc + noise_var * np.eye(n)
 
             elif method == "ciq":
                 # Deterministic: ignore trial_rng

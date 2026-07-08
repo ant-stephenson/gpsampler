@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=24:00:00
 #SBATCH --mem-per-cpu=16G
-#SBATCH --array=1-4
+#SBATCH --array=1-5
 
 # ---------------------------------------------------------------------------
 # Matérn Bayes-decision comparison — Stage 1 sweep (HPC, array over methods)
@@ -38,7 +38,7 @@ module load lang/python/anaconda/3.8.5-2021-AM
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/sw/lang/anaconda.3.8.5-2021-AM/lib
 
 # Map array task ID → method (1-indexed)
-METHODS=("" "rff" "lrff" "ciq" "pciq")
+METHODS=("" "rff" "lrff" "ciq" "pciq" "elrff")
 METHOD=${METHODS[$SLURM_ARRAY_TASK_ID]}
 
 # Input dimension: default 1; override with --export=ALL,D=2

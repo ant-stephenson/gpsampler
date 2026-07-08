@@ -148,6 +148,40 @@ def _kappa_eta(K: np.ndarray, eta: float, noise_var: float) -> float:
     return float(eigs[-1] / max(eigs[0], 1e-300))
 
 
+def _neff_exact(K: np.ndarray, noise_var: float) -> float:
+    """Exact Tr(K(K+σ²I)^{-1}) via eigendecomposition (O(n³), affordable n≤2048)."""
+    eigs = np.maximum(np.linalg.eigvalsh(K), 0.0)
+    return float(np.sum(eigs / (eigs + noise_var)))
+
+
+class _ExactLeverage:
+    """Exact ridge-leverage scores α(ω) = c^T K_ξ^{-1} c + s^T K_ξ^{-1} s
+    using the precomputed Cholesky of K_ξ = K + σ²I.
+
+    Replaces ApproxLeverage's Nyström-Woodbury approximation with direct
+    triangular solves; O(n²) per frequency but exact.  Diagnostic only —
+    use ApproxLeverage for production sweeps.
+    """
+
+    def __init__(self, X: np.ndarray, L_xi: np.ndarray, noise_var: float):
+        self.X = X
+        self._chol = (L_xi, True)   # (lower-triangular Cholesky, lower=True)
+        self.noise_var = noise_var
+
+    def __call__(self, W: np.ndarray, chunk: int = 256) -> np.ndarray:
+        """W: (F, d) frequencies → exact ridge-leverage scores (F,)."""
+        F = W.shape[0]
+        out = np.empty(F)
+        for s in range(0, F, chunk):
+            Wc = W[s:s + chunk]
+            v = self.X @ Wc.T          # (n, C)
+            c = np.cos(v)
+            sv = np.sin(v)
+            out[s:s + chunk] = (c * linalg.cho_solve(self._chol, c)
+                                 + sv * linalg.cho_solve(self._chol, sv)).sum(axis=0)
+        return out
+
+
 # ---------------------------------------------------------------------------
 # Guard G2 check
 # ---------------------------------------------------------------------------
@@ -213,14 +247,15 @@ def _khat_pciq(K: np.ndarray, eta: float, noise_var: float, J: int,
 def _lrff_setup(x: np.ndarray, nu: float, ell: float, noise_var: float):
     """Build ApproxLeverage callable and related objects for an (x,ν,ℓ) config.
 
-    Returns (K_unit, alpha_fn).  K_unit is the unit-scale kernel matrix (k(0)=1).
+    Returns (K_unit, alpha_fn, r_landmarks).
+    r_landmarks is the number of Nyström landmarks selected by recursive_rls.
     """
     kind, nu_eff = _kernel_kind(nu)
     K_unit = _km(x, kind=kind, ell=ell, nu=nu_eff)
     S = _rrls(K_unit, lam=noise_var, rng=np.random.default_rng(99))
     B = _nf(K_unit, S)
     alpha_fn = _AL(x, B, noise_var)
-    return K_unit, alpha_fn
+    return K_unit, alpha_fn, len(S)
 
 
 # ---------------------------------------------------------------------------
@@ -265,17 +300,26 @@ def _sweep_config(
     # Effective dimension and condition number (once per config)
     # ------------------------------------------------------------------
     n_eff = _neff_hutchinson(K, L_xi, n_probes=30, rng=np.random.default_rng(seed + 1))
+    # Exact n_eff via eigendecomposition — sanity-check for Hutchinson bias.
+    # O(n³) but affordable at n≤2048; used as diagnostic column only.
+    n_eff_exact = _neff_exact(K, noise_var)
     kappa = _kappa_eta(K, eta, noise_var)
 
-    # kernel kind — constant per (nu, ell), used by rff/lrff branches
+    # kernel kind — constant per (nu, ell), used by rff/lrff/elrff branches
     kind, nu_eff = _kernel_kind(nu)
 
     # ------------------------------------------------------------------
-    # LRFF-specific setup (skip for other methods — avoids O(n²) kernel)
+    # LRFF / ELRFF setup (skip for other methods — avoids O(n²) kernel)
     # ------------------------------------------------------------------
     lrff_alpha_fn = None
+    elrff_alpha_fn = None
+    r_landmarks = 0
     if method == "lrff":
-        _, lrff_alpha_fn = _lrff_setup(x, nu, ell, noise_var)
+        _, lrff_alpha_fn, r_landmarks = _lrff_setup(x, nu, ell, noise_var)
+    elif method == "elrff":
+        # Exact leverage: Cholesky solve on K_ξ instead of Nyström Woodbury.
+        elrff_alpha_fn = _ExactLeverage(x, L_xi, noise_var)
+        r_landmarks = n  # "exact" — no landmark approximation
 
     # ------------------------------------------------------------------
     # Fidelity grid
@@ -285,20 +329,24 @@ def _sweep_config(
     rows: list[dict] = []
 
     for fid in grid:
-        # --- LRFF pool cache (expensive, done once per fidelity) ---
+        # --- LRFF / ELRFF pool cache (expensive, done once per fidelity) ---
         lrff_pool_cache = None
-        if method == "lrff":
-            lrff_pool_cache = compute_sir_pool(
+        elrff_pool_cache = None
+        _pool_alpha_fn = (lrff_alpha_fn if method == "lrff"
+                          else elrff_alpha_fn if method == "elrff"
+                          else None)
+        if _pool_alpha_fn is not None:
+            _pool = compute_sir_pool(
                 n_freq=fid // 2,
-                d=d,
-                kind=kind,
-                ell=ell,
-                nu=nu_eff,
-                alpha_fn=lrff_alpha_fn,
+                d=d, kind=kind, ell=ell, nu=nu_eff,
+                alpha_fn=_pool_alpha_fn,
                 rng=np.random.default_rng(seed + fid * 1_000_000),
-                pool_factor=5,
-                pool_min=4000,
+                pool_factor=5, pool_min=4000,
             )
+            if method == "lrff":
+                lrff_pool_cache = _pool
+            else:
+                elrff_pool_cache = _pool
 
         tv_vals: list[float] = []
         p_star_vals: list[float] = []
@@ -330,13 +378,15 @@ def _sweep_config(
                     K_acc += cv @ cv.T + sv @ sv.T      # numpy upcasts to float64
                 Khat_xi = (2.0 * sigma / fid) * K_acc + noise_var * np.eye(n)
 
-            elif method == "lrff":
+            elif method in ("lrff", "elrff"):
                 # Chunked weighted ΦΦᵀ: K̂_ξ = σ·Σ_b [(g_b⊙cos_b)(g_b⊙cos_b)ᵀ
                 #                                    + (g_b⊙sin_b)(g_b⊙sin_b)ᵀ] + σ²I
                 # g_j = sqrt(Z_hat / (n_freq · α_j)) are the importance weights.
-                assert lrff_alpha_fn is not None and lrff_pool_cache is not None
+                # lrff: α from Nyström Woodbury; elrff: α exact via Cholesky solve.
+                _pc = lrff_pool_cache if method == "lrff" else elrff_pool_cache
+                assert _pc is not None
                 n_freq = fid // 2
-                _pool, _a_pool, _Z_hat = lrff_pool_cache
+                _pool, _a_pool, _Z_hat = _pc
                 W, alpha_sel, Z_hat = resample_from_pool(
                     _pool, _a_pool, _Z_hat, n_freq, trial_rng)
                 g = np.sqrt(Z_hat / (n_freq * alpha_sel))  # (n_freq,) importance weights
@@ -400,6 +450,8 @@ def _sweep_config(
                 "tv_uppq": tv_uppq,
                 "p_star_err": p_star_err_mean,
                 "n_eff": n_eff,
+                "n_eff_exact": n_eff_exact,
+                "r_landmarks": r_landmarks,
                 "kappa_eta": kappa,
                 "flops": fl,
                 "R": R,

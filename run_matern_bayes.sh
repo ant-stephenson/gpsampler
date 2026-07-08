@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=48:00:00
+#SBATCH --time=96:00:00
 #SBATCH --mem-per-cpu=16G
 #SBATCH --array=1-5
 #SBATCH --account=math038284
@@ -49,7 +49,7 @@ D=${D:-1}
 #   DTYPE=float32 halves per-chunk intermediate memory (cos/sin arrays)
 #   CHUNK_SIZE controls frequencies processed per chunk (default 512)
 # Example: sbatch --export=ALL,D=1,DTYPE=float32,CHUNK_SIZE=1024 run_matern_bayes.sh
-DTYPE=${DTYPE:-float64}
+DTYPE=${DTYPE:-float32}
 CHUNK_SIZE=${CHUNK_SIZE:-512}
 
 echo "Task $SLURM_ARRAY_TASK_ID: method=$METHOD  d=$D  dtype=$DTYPE  chunk_size=$CHUNK_SIZE"

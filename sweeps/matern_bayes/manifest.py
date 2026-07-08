@@ -63,6 +63,7 @@ def build_manifest(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "seed": seed,
         "hostname": socket.gethostname(),
+        "dtype": cfg["dtype"],
     }
 
 

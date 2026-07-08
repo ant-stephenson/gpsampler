@@ -9,6 +9,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=0:10:00
 #SBATCH --mem-per-cpu=4G
+#SBATCH --account=math038284
 
 # ---------------------------------------------------------------------------
 # Merge per-method CSVs from run_matern_bayes.sh into a single file for

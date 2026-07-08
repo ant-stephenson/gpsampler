@@ -529,6 +529,7 @@ def run_sweep(
         "nus": [float(v) for v in nus],
         "ells": list(ells),
         "d": d,
+        "dtype": dtype,
         "n_fidelity": n_fidelity,
         "R_rand": R_rand,
         "R_det": R_det,

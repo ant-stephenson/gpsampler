@@ -197,8 +197,8 @@ def _khat_pciq(K: np.ndarray, eta: float, noise_var: float, J: int,
                                 rank=max(1, int(np.sqrt(n))), rng=rng)
 
     Pinvsqrt = np.column_stack([pre.apply_inv_sqrt(np.eye(n)[:, j]) for j in range(n)])
-    W = 0.5 * (Pinvsqrt.T @ K_etaxi @ Pinvsqrt)
-    W += W.T; W *= 0.5  # symmetrise
+    W = Pinvsqrt.T @ K_etaxi @ Pinvsqrt
+    W = 0.5 * (W + W.T)  # symmetrise numerical noise
     w_min = float(max(np.linalg.eigvalsh(W).min(), 1e-10))
     M_W = matsqrt(W, J, J, w_min)
 

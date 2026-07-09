@@ -109,6 +109,20 @@ def flops_cholesky(n: int) -> int:
 # Unified dispatch
 # ---------------------------------------------------------------------------
 
+def flops_elrff(n: int, D: int, d: int = 1, n_eff: float | None = None) -> int:
+    """FLOPs for one ELRFF (exact-leverage LRFF) sample.
+
+    Same feature build as LRFF, but pool leverage evaluation uses exact
+    Cholesky solves: O(n² × pool_size) ≈ O(n² × n_eff) instead of
+    O(n × n_eff × pool_size) for the Nyström Woodbury.
+
+    Formula: n D (d/2 + 2)  +  n² n_eff
+    """
+    if n_eff is None:
+        n_eff = math.sqrt(n)
+    return flops_rff(n, D, d) + int(n ** 2 * n_eff)
+
+
 def flops(
     method: str,
     n: int,
@@ -121,11 +135,11 @@ def flops(
 
     Parameters
     ----------
-    method   : "rff", "lrff", "ciq", "pciq", or "chol"
+    method   : "rff", "lrff", "elrff", "ciq", "pciq", or "chol"
     n        : number of training points
-    fidelity : D (features) for rff/lrff; J (Lanczos steps) for ciq/pciq
+    fidelity : D (features) for rff/lrff/elrff; J (Lanczos steps) for ciq/pciq
     d        : input dimension (default 1)
-    n_eff    : effective dimension Tr(K K_ξ^{-1}); only needed for lrff
+    n_eff    : effective dimension Tr(K K_ξ^{-1}); needed for lrff/elrff
 
     Returns
     -------
@@ -136,6 +150,8 @@ def flops(
         return flops_rff(n, fidelity, d)
     if m == "lrff":
         return flops_lrff(n, fidelity, d, n_eff)
+    if m == "elrff":
+        return flops_elrff(n, fidelity, d, n_eff)
     if m == "ciq":
         return flops_ciq(n, fidelity)
     if m == "pciq":
@@ -144,5 +160,5 @@ def flops(
         return flops_cholesky(n)
     raise ValueError(
         f"Unknown method {method!r}. "
-        "Expected one of 'rff', 'lrff', 'ciq', 'pciq', 'chol'."
+        "Expected one of 'rff', 'lrff', 'elrff', 'ciq', 'pciq', 'chol'."
     )

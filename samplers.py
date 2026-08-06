@@ -622,6 +622,325 @@ def sample_lrff_from_x(
     return y_noise, np.nan
 
 
+# ---------------------------------------------------------------------------
+# Spectral-density helpers (private)
+# ---------------------------------------------------------------------------
+
+def _log_spectral_density(
+    omega: np.ndarray,
+    kind: str,
+    l: float,
+    nu: float,
+    d: int,
+) -> np.ndarray:
+    """Log spectral density log p(omega) for a batch of frequencies.
+
+    RBF   : p = N(0, I/l^2), normalised.
+    Matern: p = multivariate-t(2*nu, 0, I/l^2), normalised.
+
+    Parameters
+    ----------
+    omega : (F, d) frequency array
+    kind  : 'rbf' or 'matern'
+    l     : kernel lengthscale
+    nu    : Matern smoothness (ignored for RBF)
+    d     : input dimension
+
+    Returns
+    -------
+    log_p : (F,) log-density values
+    """
+    from scipy.special import gammaln as _gammaln
+    sq = np.sum(omega ** 2, axis=1)  # (F,)
+    if kind in ("rbf", "se"):
+        # N(0, I/l^2):  log p = d*log(l) - d/2*log(2*pi) - l^2/2 * sq
+        return d * np.log(l) - 0.5 * d * np.log(2.0 * np.pi) - 0.5 * l**2 * sq
+    if kind == "matern":
+        # multivariate-t(2*nu, 0, I/l^2):
+        # log p = log Gamma((2nu+d)/2) - log Gamma(nu)
+        #       + d*log(l) - d/2*log(2*nu*pi)
+        #       - (2nu+d)/2 * log(1 + l^2*sq/(2*nu))
+        log_norm = (
+            _gammaln(0.5 * (2.0 * nu + d))
+            - _gammaln(nu)
+            + d * np.log(l)
+            - 0.5 * d * np.log(2.0 * nu * np.pi)
+        )
+        return log_norm - 0.5 * (2.0 * nu + d) * np.log(
+            1.0 + l**2 * sq / (2.0 * nu)
+        )
+    raise ValueError(f"_log_spectral_density: unknown kernel kind {kind!r}")
+
+
+# ---------------------------------------------------------------------------
+# Sampler: Safeguarded importance-weighted RFF (IW-RFF)
+# ---------------------------------------------------------------------------
+
+def sample_iw_rff_from_x(
+    x: np.ndarray,
+    sigma: float,
+    noise_var: float,
+    l: float,
+    rng: np.random.Generator,
+    D: int,
+    rho: float = 0.1,
+    guard_scale: float = 0.5,
+    kernel_type: str = "rbf",
+    nu: float = 1.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Safeguarded importance-weighted RFF (IW-RFF) GP prior sampler.
+
+    Draws D//2 frequencies from the mixture proposal
+
+        q_rho(omega) = (1 - rho) * p(omega) + rho * g(omega)
+
+    where p is the kernel's spectral density and g is the same spectral family
+    with lengthscale l_guard = l * guard_scale < l (guard_scale < 1 gives g
+    heavier tails than p in frequency space).  Each frequency is importance-
+    weighted by the bounded ratio p(omega) / q_rho(omega) in [1-rho, 1], giving
+    a covariance-unbiased feature matrix: E[Phi @ Phi.T] = sigma * K.
+
+    Parameters
+    ----------
+    x           : (n, d) input locations
+    sigma       : kernel output scale
+    noise_var   : observation noise variance
+    l           : kernel lengthscale
+    rng         : numpy random Generator
+    D           : number of RFF features (must be even)
+    rho         : guard mixture weight rho in (0, 1); default 0.1
+    guard_scale : l_guard = l * guard_scale; must be in (0, 1).  Default 0.5.
+    kernel_type : 'rbf'/'se' or 'matern'
+    nu          : Matern smoothness (ignored for RBF); default 1.5
+
+    Returns
+    -------
+    y_noise    : (n,) sample with covariance approx sigma*K + noise_var*I
+    approx_cov : (n, n) IS-reweighted Phi @ Phi.T + noise_var * I
+    """
+    if D % 2 != 0:
+        raise ValueError("D must be even")
+    if not (0.0 < rho < 1.0):
+        raise ValueError(f"rho must be in (0, 1); got {rho}")
+    if not (0.0 < guard_scale < 1.0):
+        raise ValueError(
+            f"guard_scale must be in (0, 1) for heavier guard tails; got {guard_scale}"
+        )
+
+    n, d = x.shape
+    n_freq = D // 2
+    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
+    l_guard = l * guard_scale
+
+    # ------------------------------------------------------------------
+    # 1. Sample n_freq frequencies from mixture q_rho = (1-rho)*p + rho*g
+    # ------------------------------------------------------------------
+    from_p = rng.uniform(size=n_freq) < (1.0 - rho)  # True -> from p
+    n_from_p = int(from_p.sum())
+    n_from_g = n_freq - n_from_p
+
+    from gpsampler.leverage_reweighted_rff import spectral_sampler
+
+    omega_p = spectral_sampler(n_from_p, d, kind, l,       nu, rng)  # (n_from_p, d)
+    omega_g = spectral_sampler(n_from_g, d, kind, l_guard, nu, rng)  # (n_from_g, d)
+
+    omega = np.empty((n_freq, d), dtype=np.float64)
+    omega[from_p]  = omega_p
+    omega[~from_p] = omega_g
+
+    # ------------------------------------------------------------------
+    # 2. IS weights r(omega) = p(omega) / q_rho(omega)
+    #    q_rho >= (1-rho)*p  so  r <= 1/(1-rho)  always.
+    # ------------------------------------------------------------------
+    log_p = _log_spectral_density(omega, kind, l,       nu, d)  # (n_freq,)
+    log_g = _log_spectral_density(omega, kind, l_guard, nu, d)  # (n_freq,)
+
+    log_q = np.logaddexp(np.log1p(-rho) + log_p, np.log(rho) + log_g)
+    log_r = log_p - log_q  # log IS weight, in [log(1-rho), 0]
+    r = np.exp(log_r)       # in [1-rho, 1]
+
+    # ------------------------------------------------------------------
+    # 3. IS-reweighted feature matrix Phi (n x D)
+    #    g_j = sqrt(r_j / n_freq)  so  Phi @ Phi.T = sigma * sum_j r_j/n_freq M_j
+    #    E[Phi @ Phi.T] = sigma * E_p[M(omega)] = sigma * K
+    # ------------------------------------------------------------------
+    g_j = np.sqrt(r / n_freq)                      # (n_freq,)
+    proj = x.astype(np.float64) @ omega.T          # (n, n_freq)
+    sq_sigma = float(np.sqrt(sigma))
+    Phi = np.empty((n, D), dtype=np.float64)
+    Phi[:, 0::2] = sq_sigma * g_j * np.cos(proj)
+    Phi[:, 1::2] = sq_sigma * g_j * np.sin(proj)
+
+    # ------------------------------------------------------------------
+    # 4. Draw prior sample and add observation noise
+    # ------------------------------------------------------------------
+    z = rng.standard_normal(D)
+    y_noise = Phi @ z + rng.normal(scale=float(np.sqrt(noise_var)), size=n)
+    approx_cov = Phi @ Phi.T + noise_var * np.eye(n)
+    return y_noise, approx_cov
+
+
+# ---------------------------------------------------------------------------
+# Sampler: Stratified truncated-Taylor leverage-reweighted RFF
+# ---------------------------------------------------------------------------
+
+def sample_stratified_rff_from_x(
+    x: np.ndarray,
+    sigma: float,
+    noise_var: float,
+    l: float,
+    rng: np.random.Generator,
+    D: int,
+    taylor_order: int = 2,
+    nystrom_rank: int = 50,
+    pool_factor: int = 5,
+    kernel_type: str = "rbf",
+    nu: float = 1.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Stratified truncated-Taylor leverage-reweighted RFF GP prior sampler.
+
+    Extends sample_lrff_from_x with two improvements:
+
+    1. **Stratified pool**: the P = pool_factor * D//2 candidate frequencies
+       are drawn from a stratified base distribution rather than i.i.d.
+       Equal-probability radial strata under the spectral CDF ensure uniform
+       coverage, giving a lower-variance estimate of Z_hat = E_p[alpha].
+
+    2. **Truncated-Taylor surrogate + rejection step**: a degree-taylor_order
+       polynomial alpha_hat(r) = sum_{k=0}^{T} c_k r^{2k}  (r = ||omega||)
+       is fit by least squares to the pool's leverage scores.  Each pool
+       candidate is then accepted/rejected with probability
+       alpha(omega) / max(alpha_hat(||omega||), alpha(omega)), thinning the
+       pool towards high-leverage frequencies before the SIR step.
+
+    After rejection, n_freq frequencies are drawn by SIR proportional to
+    exact leverage and corrected by Z_hat/alpha IS weights for unbiasedness.
+
+    Parameters
+    ----------
+    x            : (n, d) input locations
+    sigma        : kernel output scale
+    noise_var    : observation noise variance
+    l            : kernel lengthscale
+    rng          : numpy random Generator
+    D            : number of RFF features (must be even)
+    taylor_order : degree T for the radial leverage surrogate; default 2
+    nystrom_rank : Nyström rank for the Woodbury leverage; default 50
+    pool_factor  : pool size P = pool_factor * D//2; default 5
+    kernel_type  : 'rbf'/'se' or 'matern'
+    nu           : Matern smoothness (ignored for RBF); default 1.5
+
+    Returns
+    -------
+    y_noise    : (n,) sample approx ~ GP(0, K_xi)
+    approx_cov : (n, n) Phi @ Phi.T + noise_var * I
+    """
+    if D % 2 != 0:
+        raise ValueError("D must be even")
+
+    n, d = x.shape
+    n_freq = D // 2
+    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
+    P = max(pool_factor * n_freq, n_freq + 1)
+
+    # ------------------------------------------------------------------
+    # 1. Stratified radial pool from p
+    #    Divide [0,1) into P equal strata, place one stratified-uniform
+    #    point per stratum, map through the spectral radial quantile.
+    # ------------------------------------------------------------------
+    u_strat = (np.arange(P) + rng.uniform(size=P)) / P  # (P,) in (0, 1)
+
+    if kind in ("rbf", "se"):
+        from scipy.stats import chi
+        radii = chi.ppf(u_strat, df=d) / l          # (P,) chi(d)/l quantiles
+    elif kind == "matern":
+        from scipy.stats import chi2, chi as _chi
+        # Matérn: ||omega|| = chi(d)/l * sqrt(2*nu / u_scale), u_scale ~ chi2(2*nu).
+        # Stratify the heavy-tailed chi2(2*nu) component.
+        u_scale = np.maximum(chi2.ppf(u_strat, df=2.0 * nu), 1e-10)
+        g_norms = _chi.rvs(df=d, size=P, random_state=rng)
+        radii = (g_norms / l) * np.sqrt(2.0 * nu / u_scale)
+    else:
+        raise ValueError(
+            f"unsupported kernel_type {kernel_type!r}; choose 'rbf' or 'matern'"
+        )
+
+    dirs = rng.standard_normal((P, d))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-30
+    pool = radii[:, None] * dirs          # (P, d)
+
+    # ------------------------------------------------------------------
+    # 2. Woodbury leverage scoring for all pool candidates
+    # ------------------------------------------------------------------
+    from gpsampler.leverage_reweighted_rff import (
+        kernel_matrix, nystrom_factor, ApproxLeverage
+    )
+    K_mat = kernel_matrix(x, kind, l, nu)
+    rank = min(nystrom_rank, n)
+    landmarks = rng.choice(n, size=rank, replace=False)
+    B = nystrom_factor(K_mat, landmarks)
+    alpha_fn = ApproxLeverage(x, B, noise_var)
+
+    alpha_pool = np.maximum(alpha_fn(pool), 1e-12)   # (P,)
+
+    # ------------------------------------------------------------------
+    # 3. Fit truncated-Taylor surrogate  alpha_hat(r) = sum_k c_k r^{2k}
+    #    by least squares in the variable r^2.
+    # ------------------------------------------------------------------
+    sq_radii = radii ** 2                             # (P,)
+    T = int(taylor_order)
+    V = np.column_stack([sq_radii ** k for k in range(T + 1)])  # (P, T+1)
+    coeffs, *_ = np.linalg.lstsq(V, alpha_pool, rcond=None)
+    alpha_hat = np.maximum(V @ coeffs, 1e-12)        # (P,) Taylor surrogate
+
+    # ------------------------------------------------------------------
+    # 4. Rejection step: accept pool[j] with probability
+    #       alpha_pool[j] / max(alpha_pool[j], alpha_hat[j])
+    #    The pointwise max gives a valid upper bound, so acceptance <= 1.
+    # ------------------------------------------------------------------
+    alpha_bound = np.maximum(alpha_pool, alpha_hat)
+    accept_prob = alpha_pool / alpha_bound            # in (0, 1]
+    mask = rng.uniform(size=P) < accept_prob
+
+    if mask.sum() < n_freq:                          # fallback: full pool
+        mask = np.ones(P, dtype=bool)
+
+    survivors  = pool[mask]         # (S, d),  S >= n_freq
+    alpha_surv = alpha_pool[mask]   # (S,)
+
+    # ------------------------------------------------------------------
+    # 5. SIR resample n_freq from survivors proportional to leverage
+    # ------------------------------------------------------------------
+    probs = alpha_surv / alpha_surv.sum()
+    sel   = rng.choice(len(survivors), size=n_freq, replace=True, p=probs)
+    omega   = survivors[sel]         # (n_freq, d)
+    alpha_j = alpha_surv[sel]        # (n_freq,)
+
+    # ------------------------------------------------------------------
+    # 6. IS-reweighted feature matrix
+    #    Z_hat estimated from stratified pool for lower variance.
+    #    weight_j = Z_hat / (n_freq * alpha_j)  -> E[Phi @ Phi.T] = sigma*K
+    # ------------------------------------------------------------------
+    Z_hat = float(alpha_pool.mean())
+    if Z_hat < 1e-15:
+        Z_hat = 1.0
+
+    g_j = np.sqrt(Z_hat / (n_freq * alpha_j))    # (n_freq,)
+    proj = x.astype(np.float64) @ omega.T         # (n, n_freq)
+    sq_sigma = float(np.sqrt(sigma))
+    Phi = np.empty((n, D), dtype=np.float64)
+    Phi[:, 0::2] = sq_sigma * g_j * np.cos(proj)
+    Phi[:, 1::2] = sq_sigma * g_j * np.sin(proj)
+
+    # ------------------------------------------------------------------
+    # 7. Draw prior sample and add observation noise
+    # ------------------------------------------------------------------
+    z = rng.standard_normal(D)
+    y_noise = Phi @ z + rng.normal(scale=float(np.sqrt(noise_var)), size=n)
+    approx_cov = Phi @ Phi.T + noise_var * np.eye(n)
+    return y_noise, approx_cov
+
+
 def sample_mat_rff_from_x1(x: NPInputMat, sigma: float, noise_var: float, l:
                            float, rng: np.random.Generator, D: int, G: int,
                            nu: float) -> Tuple[NPSample, NPKernel]:

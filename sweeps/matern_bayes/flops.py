@@ -109,6 +109,27 @@ def flops_cholesky(n: int) -> int:
 # Unified dispatch
 # ---------------------------------------------------------------------------
 
+def flops_iw_rff(n: int, D: int, d: int = 1) -> int:
+    """FLOPs for one IW-RFF (importance-weighted RFF) sample.
+
+    Same as RFF: the IS weight computation is O(D/2 * d), negligible vs ΦΦᵀ.
+
+    Formula: n D (d/2 + 2)
+    """
+    return flops_rff(n, D, d)
+
+
+def flops_stratified_rff(n: int, D: int, d: int = 1, n_eff: float | None = None) -> int:
+    """FLOPs for one stratified-RFF sample.
+
+    Same as LRFF: stratified pool construction has the same asymptotic cost
+    as the i.i.d. pool in LRFF (one Woodbury leverage evaluation per candidate).
+
+    Formula: n D (d/2 + 2)  +  n n_eff²
+    """
+    return flops_lrff(n, D, d, n_eff)
+
+
 def flops_elrff(n: int, D: int, d: int = 1, n_eff: float | None = None) -> int:
     """FLOPs for one ELRFF (exact-leverage LRFF) sample.
 
@@ -152,6 +173,10 @@ def flops(
         return flops_lrff(n, fidelity, d, n_eff)
     if m == "elrff":
         return flops_elrff(n, fidelity, d, n_eff)
+    if m == "iw_rff":
+        return flops_iw_rff(n, fidelity, d)
+    if m == "stratified_rff":
+        return flops_stratified_rff(n, fidelity, d, n_eff)
     if m == "ciq":
         return flops_ciq(n, fidelity)
     if m == "pciq":
@@ -160,5 +185,6 @@ def flops(
         return flops_cholesky(n)
     raise ValueError(
         f"Unknown method {method!r}. "
-        "Expected one of 'rff', 'lrff', 'elrff', 'ciq', 'pciq', 'chol'."
+        "Expected one of 'rff', 'lrff', 'elrff', 'iw_rff', 'stratified_rff', "
+        "'ciq', 'pciq', 'chol'."
     )

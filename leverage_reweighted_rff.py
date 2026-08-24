@@ -261,9 +261,9 @@ def reweighted_rff_sampler(X, kind="rbf", ell=0.1, nu=1.5, sigma2=1e-2,
 
     # (4) feature map.  Per-frequency gain  g_j = sqrt( Z_hat / (n_freq * alpha_j) ),
     #     two columns (cos, sin) per frequency -> D = 2 n_freq features.
-    g = np.sqrt(Z_hat / (n_freq * alpha_sel))            # (n_freq,)
-    proj = X @ W.T                                       # (n, n_freq)
-    Phi = np.empty((n, 2 * n_freq))
+    g = np.sqrt(Z_hat / (n_freq * alpha_sel)).astype(np.float32)  # (n_freq,)
+    proj = X.astype(np.float32) @ W.T.astype(np.float32)          # (n, n_freq) float32
+    Phi = np.empty((n, 2 * n_freq), dtype=np.float32)
     Phi[:, 0::2] = g * np.cos(proj)
     Phi[:, 1::2] = g * np.sin(proj)
 

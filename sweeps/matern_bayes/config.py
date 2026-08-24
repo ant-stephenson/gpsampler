@@ -18,7 +18,7 @@ ETA: float = 0.8         # noise-split η — repo default for CIQ/PCIQ
 # Method registry (Guard G3: CG / Lanczos deliberately absent)
 # ---------------------------------------------------------------------------
 
-METHODS: tuple[str, ...] = ("rff", "lrff", "elrff", "ciq", "pciq")
+METHODS: tuple[str, ...] = ("rff", "lrff", "elrff", "iw_rff", "stratified_rff", "ciq", "pciq")
 
 # Realisations per method type
 R_RAND: int = 50   # RFF, LRFF — randomised
@@ -80,9 +80,11 @@ def fidelity_bound(method: str, n: int, n_eff: float | None = None) -> float:
     n_eff  : effective dimension Tr(K K_ξ^{-1}); required for rff/lrff
     """
     import math
-    if method in ("rff", "lrff", "elrff"):
+    if method in ("rff", "lrff", "elrff", "iw_rff", "stratified_rff"):
         if n_eff is None:
-            raise ValueError("n_eff required for rff/lrff/elrff fidelity_bound")
+            raise ValueError(
+                f"n_eff required for {method} fidelity_bound"
+            )
         return float(n_eff ** 2)
     if method == "ciq":
         return math.sqrt(n) * math.log(n)
@@ -110,7 +112,7 @@ def fidelity_grid(
     hi = bound * 10
     raw = np.geomspace(lo, hi, n_points)
 
-    if method in ("rff", "lrff", "elrff"):
+    if method in ("rff", "lrff", "elrff", "iw_rff", "stratified_rff"):
         # D must be even
         grid = [int(round(v / 2) * 2) for v in raw]
     else:

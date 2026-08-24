@@ -68,6 +68,8 @@ from gpsampler.leverage_reweighted_rff import (
     resample_from_pool,
 )
 
+from scipy.special import gammaln as _gammaln
+
 from .config import (
     SIGMA_F2,
     SIGMA_XI2,
@@ -259,6 +261,75 @@ def _lrff_setup(x: np.ndarray, nu: float, ell: float, noise_var: float):
 
 
 # ---------------------------------------------------------------------------
+# Spectral log-density (for IW-RFF IS weights, inline to avoid sampler import)
+# ---------------------------------------------------------------------------
+
+def _log_spectral(omega: np.ndarray, kind: str, ell: float,
+                  nu: float, d: int) -> np.ndarray:
+    """Log spectral density log p(omega) for RBF or Matern kernel.
+
+    RBF  : p = N(0, I/ell^2)
+    Matern: p = multivariate-t(2*nu, 0, I/ell^2)
+    """
+    sq = np.sum(omega ** 2, axis=1)
+    if kind == "rbf":
+        return d * np.log(ell) - 0.5 * d * np.log(2.0 * np.pi) - 0.5 * ell**2 * sq
+    # matern
+    log_norm = (
+        _gammaln(0.5 * (2.0 * nu + d))
+        - _gammaln(nu)
+        + d * np.log(ell)
+        - 0.5 * d * np.log(2.0 * nu * np.pi)
+    )
+    return log_norm - 0.5 * (2.0 * nu + d) * np.log(1.0 + ell**2 * sq / (2.0 * nu))
+
+
+# ---------------------------------------------------------------------------
+# Stratified-radial pool builder (for stratified_rff)
+# ---------------------------------------------------------------------------
+
+def _build_stratified_pool(
+    max_n_freq: int,
+    d: int,
+    kind: str,
+    ell: float,
+    nu_eff: float,
+    alpha_fn,
+    rng: np.random.Generator,
+    pool_factor: int = 5,
+    pool_min: int = 4000,
+) -> tuple:
+    """Pool for stratified_rff: equal-probability radial strata instead of i.i.d.
+
+    Draws P frequencies using radial CDF inversion so each frequency stratum
+    has the same probability mass under p.  This gives a lower-variance Z_hat
+    and better pool coverage than the i.i.d. pool in compute_sir_pool.
+
+    Returns (pool, a_pool, Z_hat) compatible with resample_from_pool.
+    """
+    from scipy.stats import chi  # chi distribution for RBF radial CDF
+
+    P = max(pool_factor * max_n_freq, pool_min)
+    u_strat = (np.arange(P) + rng.uniform(size=P)) / P  # (P,) stratified uniforms
+
+    if kind == "rbf":
+        radii = chi.ppf(u_strat, df=d) / ell                      # (P,)
+    else:  # matern
+        from scipy.stats import chi2
+        u_scale = np.maximum(chi2.ppf(u_strat, df=2.0 * nu_eff), 1e-10)
+        g_norms = chi.rvs(df=d, size=P, random_state=rng)
+        radii = (g_norms / ell) * np.sqrt(2.0 * nu_eff / u_scale)  # (P,)
+
+    dirs = rng.standard_normal((P, d))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-30
+    pool = radii[:, None] * dirs                                   # (P, d)
+
+    a_pool = np.maximum(alpha_fn(pool), 1e-12)
+    Z_hat = float(a_pool.mean())
+    return pool, a_pool, Z_hat
+
+
+# ---------------------------------------------------------------------------
 # Single-config sweep
 # ---------------------------------------------------------------------------
 
@@ -309,15 +380,14 @@ def _sweep_config(
     kind, nu_eff = _kernel_kind(nu)
 
     # ------------------------------------------------------------------
-    # LRFF / ELRFF setup (skip for other methods — avoids O(n²) kernel)
+    # LRFF / ELRFF / stratified_rff setup — build Woodbury alpha_fn once
     # ------------------------------------------------------------------
     lrff_alpha_fn = None
     elrff_alpha_fn = None
     r_landmarks = 0
-    if method == "lrff":
+    if method in ("lrff", "stratified_rff"):
         _, lrff_alpha_fn, r_landmarks = _lrff_setup(x, nu, ell, noise_var)
     elif method == "elrff":
-        # Exact leverage: Cholesky solve on K_ξ instead of Nyström Woodbury.
         elrff_alpha_fn = _ExactLeverage(x, L_xi, noise_var)
         r_landmarks = n  # "exact" — no landmark approximation
 
@@ -326,28 +396,47 @@ def _sweep_config(
     # ------------------------------------------------------------------
     grid = fidelity_grid(method, n, n_eff=n_eff, n_points=n_fidelity)
 
+    # ------------------------------------------------------------------
+    # Shared pool — built ONCE at the largest fidelity, resampled per trial.
+    # Previously rebuilt at every fidelity point (N_FIDELITY × O(n·r·P)).
+    # Now: 1 × O(n·r·P_max) amortised across all fidelities and R trials.
+    # ------------------------------------------------------------------
+    _shared_pool: Optional[tuple] = None
+    if method in ("lrff", "elrff", "stratified_rff"):
+        max_n_freq = max(grid) // 2
+        _pool_rng = np.random.default_rng(seed + 999_999_999)
+        if method == "stratified_rff":
+            _shared_pool = _build_stratified_pool(
+                max_n_freq=max_n_freq,
+                d=d, kind=kind, ell=ell, nu_eff=nu_eff,
+                alpha_fn=lrff_alpha_fn,
+                rng=_pool_rng, pool_factor=5, pool_min=4000,
+            )
+        else:
+            _pa = lrff_alpha_fn if method == "lrff" else elrff_alpha_fn
+            _shared_pool = compute_sir_pool(
+                n_freq=max_n_freq,
+                d=d, kind=kind, ell=ell, nu=nu_eff,
+                alpha_fn=_pa,
+                rng=_pool_rng, pool_factor=5, pool_min=4000,
+            )
+
+    # ------------------------------------------------------------------
+    # IW-RFF constants (precomputed outside fidelity / trial loops)
+    # ------------------------------------------------------------------
+    _iw_rho = 0.1          # guard mixture weight
+    _iw_guard_scale = 0.5  # l_guard = ell * guard_scale  (< 1 → heavier tails)
+    _iw_l_guard = ell * _iw_guard_scale
+    # For Matern: log-density constant shared between p and g (same ν, d)
+    _iw_log_t_base = (
+        _gammaln(0.5 * (2.0 * nu_eff + d))
+        - _gammaln(nu_eff)
+        - 0.5 * d * np.log(2.0 * nu_eff * np.pi)
+    ) if (method == "iw_rff" and kind == "matern") else 0.0
+
     rows: list[dict] = []
 
     for fid in grid:
-        # --- LRFF / ELRFF pool cache (expensive, done once per fidelity) ---
-        lrff_pool_cache = None
-        elrff_pool_cache = None
-        _pool_alpha_fn = (lrff_alpha_fn if method == "lrff"
-                          else elrff_alpha_fn if method == "elrff"
-                          else None)
-        if _pool_alpha_fn is not None:
-            _pool = compute_sir_pool(
-                n_freq=fid // 2,
-                d=d, kind=kind, ell=ell, nu=nu_eff,
-                alpha_fn=_pool_alpha_fn,
-                rng=np.random.default_rng(seed + fid * 1_000_000),
-                pool_factor=5, pool_min=4000,
-            )
-            if method == "lrff":
-                lrff_pool_cache = _pool
-            else:
-                elrff_pool_cache = _pool
-
         tv_vals: list[float] = []
         p_star_vals: list[float] = []
         p_star_err_vals: list[float] = []
@@ -378,17 +467,16 @@ def _sweep_config(
                     K_acc += cv @ cv.T + sv @ sv.T      # numpy upcasts to float64
                 Khat_xi = (2.0 * sigma / fid) * K_acc + noise_var * np.eye(n)
 
-            elif method in ("lrff", "elrff"):
+            elif method in ("lrff", "elrff", "stratified_rff"):
                 # Chunked weighted ΦΦᵀ: K̂_ξ = σ·Σ_b [(g_b⊙cos_b)(g_b⊙cos_b)ᵀ
                 #                                    + (g_b⊙sin_b)(g_b⊙sin_b)ᵀ] + σ²I
                 # g_j = sqrt(Z_hat / (n_freq · α_j)) are the importance weights.
-                # lrff: α from Nyström Woodbury; elrff: α exact via Cholesky solve.
-                _pc = lrff_pool_cache if method == "lrff" else elrff_pool_cache
-                assert _pc is not None
+                # Shared pool built once at max fidelity; resample per trial.
+                assert _shared_pool is not None
+                _sp, _sa, _sz = _shared_pool
                 n_freq = fid // 2
-                _pool, _a_pool, _Z_hat = _pc
                 W, alpha_sel, Z_hat = resample_from_pool(
-                    _pool, _a_pool, _Z_hat, n_freq, trial_rng)
+                    _sp, _sa, _sz, n_freq, trial_rng)
                 g = np.sqrt(Z_hat / (n_freq * alpha_sel))  # (n_freq,) importance weights
                 K_acc = np.zeros((n, n), dtype=np.float64)
                 for start in range(0, n_freq, chunk_size):
@@ -400,6 +488,59 @@ def _sweep_config(
                     sv_w = (np.sin(v) * g_b).astype(dtype)
                     K_acc += cv_w @ cv_w.T + sv_w @ sv_w.T  # upcasts to float64
                 Khat_xi = sigma * K_acc + noise_var * np.eye(n)
+
+            elif method == "iw_rff":
+                # Importance-weighted RFF with safeguarded mixture proposal.
+                # q_ρ = (1-ρ)·p + ρ·g  where g is a heavier-tailed guard.
+                # IS weights r_j = p(ω_j)/q_ρ(ω_j) ∈ [1-ρ, 1/(1-ρ)] — bounded.
+                # Feature scale: sqrt(r_j / n_freq) so E[ΦΦᵀ] = σ·K.
+                n_freq = fid // 2
+                # Draw from mixture: Bernoulli selects p vs g
+                use_guard = trial_rng.random(n_freq) < _iw_rho
+                n_p = int((~use_guard).sum())
+                n_g = n_freq - n_p
+                # Sample from p (true spectral density)
+                if kind == "rbf":
+                    omega_p = trial_rng.multivariate_normal(
+                        np.zeros(d), np.eye(d) / ell ** 2, n_p) if n_p > 0 else np.zeros((0, d))
+                    omega_g = trial_rng.multivariate_normal(
+                        np.zeros(d), np.eye(d) / _iw_l_guard ** 2, n_g) if n_g > 0 else np.zeros((0, d))
+                else:
+                    # Matern: student-t spectral density, scale by l or l_guard
+                    _g_p = trial_rng.standard_normal((n_p, d)) if n_p > 0 else np.zeros((0, d))
+                    _u_p = trial_rng.chisquare(2.0 * nu_eff, size=(n_p, 1)) if n_p > 0 else np.ones((0, 1))
+                    omega_p = (_g_p / ell) * np.sqrt(2.0 * nu_eff / _u_p) if n_p > 0 else np.zeros((0, d))
+                    _g_g = trial_rng.standard_normal((n_g, d)) if n_g > 0 else np.zeros((0, d))
+                    _u_g = trial_rng.chisquare(2.0 * nu_eff, size=(n_g, 1)) if n_g > 0 else np.ones((0, 1))
+                    omega_g = (_g_g / _iw_l_guard) * np.sqrt(2.0 * nu_eff / _u_g) if n_g > 0 else np.zeros((0, d))
+                # Stack all samples (from p and g)
+                omega_all = np.vstack([omega_p, omega_g]) if (n_p > 0 and n_g > 0) else (omega_p if n_p > 0 else omega_g)
+                # Compute IS weights r = p(ω)/q_ρ(ω) for each sample
+                sq_norms = np.sum(omega_all ** 2, axis=1)
+                if kind == "rbf":
+                    log_p_all = -0.5 * d * np.log(2.0 * np.pi) + d * np.log(ell) - 0.5 * ell ** 2 * sq_norms
+                    log_g_all = -0.5 * d * np.log(2.0 * np.pi) + d * np.log(_iw_l_guard) - 0.5 * _iw_l_guard ** 2 * sq_norms
+                else:
+                    log_p_all = (_iw_log_t_base + d * np.log(ell)
+                                 - (nu_eff + 0.5 * d) * np.log(1.0 + ell ** 2 * sq_norms / (2.0 * nu_eff)))
+                    log_g_all = (_iw_log_t_base + d * np.log(_iw_l_guard)
+                                 - (nu_eff + 0.5 * d) * np.log(1.0 + _iw_l_guard ** 2 * sq_norms / (2.0 * nu_eff)))
+                log_q_all = np.logaddexp(
+                    np.log1p(-_iw_rho) + log_p_all,
+                    np.log(_iw_rho) + log_g_all,
+                )
+                r_all = np.exp(log_p_all - log_q_all)  # ∈ [1-ρ, 1/(1-ρ)]
+                g_weights = np.sqrt(r_all / n_freq)    # feature scales
+                K_acc = np.zeros((n, n), dtype=np.float64)
+                for start in range(0, n_freq, chunk_size):
+                    b = min(chunk_size, n_freq - start)
+                    W_b = omega_all[start:start + b]
+                    g_b = g_weights[start:start + b]
+                    v = (x @ W_b.T).astype(dtype)          # (n, b)
+                    cv_w = (np.cos(v) * g_b).astype(dtype)
+                    sv_w = (np.sin(v) * g_b).astype(dtype)
+                    K_acc += cv_w @ cv_w.T + sv_w @ sv_w.T
+                Khat_xi = (2.0 * sigma) * K_acc + noise_var * np.eye(n)
 
             elif method == "ciq":
                 # Deterministic: ignore trial_rng

@@ -32,7 +32,7 @@ from gpsampler.maths import k_se, k_mat
 
 try:
     from gpprediction.kernels.keops_kernels import RBFKernel
-except ImportError:
+except (ImportError, AttributeError):
     pass  # only needed for KeOps-based CIQ sampler
 
 # warnings.simplefilter("error")

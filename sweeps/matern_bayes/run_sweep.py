@@ -630,6 +630,7 @@ def run_sweep(
     tag: str = "",
     dtype: type = np.float64,
     chunk_size: int = 512,
+    resume: bool = False,
 ) -> pathlib.Path:
     """Run the full BV comparison sweep and persist results.
 
@@ -690,7 +691,18 @@ def run_sweep(
     manifest_path = outdir / f"{stem}_manifest.json"
     write_manifest(manifest, manifest_path)
 
+    # --- Resume: load existing results and identify completed configs ---
     all_rows: list[dict] = []
+    done_configs: set[tuple] = set()
+    if resume and csv_path.exists():
+        existing_df = pd.read_csv(csv_path)
+        all_rows = existing_df.to_dict("records")
+        for _, r in existing_df.iterrows():
+            done_configs.add((r["method"], int(r["n"]),
+                              float(r["nu"]), float(r["ell"])))
+        if verbose:
+            print(f"[resume] Loaded {len(all_rows)} rows, "
+                  f"{len(done_configs)} configs already done", flush=True)
 
     t0 = time.time()
     for method in methods:
@@ -698,6 +710,14 @@ def run_sweep(
         for n in ns:
             for nu in nus:
                 for ell in ells:
+                    if (method, n, float(nu), float(ell)) in done_configs:
+                        if verbose:
+                            print(
+                                f"\n  [skip] {method.upper():<5}  n={n}  "
+                                f"nu={nu}  ell={ell}  d={d}  — already done",
+                                flush=True,
+                            )
+                        continue
                     if verbose:
                         print(
                             f"\n=== {method.upper():<5}  n={n}  nu={nu}  ell={ell}  d={d}  R={R} ===",
@@ -717,6 +737,9 @@ def run_sweep(
                         chunk_size=chunk_size,
                     )
                     all_rows.extend(rows)
+
+                    # Flush after each config (crash safety)
+                    pd.DataFrame(all_rows).to_csv(csv_path, index=False)
 
     df = pd.DataFrame(all_rows)
     df.to_csv(csv_path, index=False)
@@ -771,6 +794,10 @@ def _parse_args(argv=None):
         "--chunk_size", type=int, default=512,
         help="Frequencies per chunk in RFF Khat accumulation (default 512).",
     )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Skip configs already present in the output CSV.",
+    )
     return parser.parse_args(argv)
 
 
@@ -805,5 +832,6 @@ if __name__ == "__main__":
         tag=tag,
         dtype=np.float32 if args.dtype == "float32" else np.float64,
         chunk_size=args.chunk_size,
+        resume=args.resume,
     )
     print(f"Output: {out}")

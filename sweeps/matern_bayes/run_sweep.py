@@ -631,6 +631,7 @@ def run_sweep(
     dtype: type = np.float64,
     chunk_size: int = 512,
     resume: bool = False,
+    n_jobs: int = 1,
 ) -> pathlib.Path:
     """Run the full BV comparison sweep and persist results.
 
@@ -704,7 +705,8 @@ def run_sweep(
             print(f"[resume] Loaded {len(all_rows)} rows, "
                   f"{len(done_configs)} configs already done", flush=True)
 
-    t0 = time.time()
+    # --- Build work list (skip done configs) ---
+    work: list[tuple] = []
     for method in methods:
         R = R_det if method in DET_METHODS else R_rand
         for n in ns:
@@ -713,33 +715,57 @@ def run_sweep(
                     if (method, n, float(nu), float(ell)) in done_configs:
                         if verbose:
                             print(
-                                f"\n  [skip] {method.upper():<5}  n={n}  "
-                                f"nu={nu}  ell={ell}  d={d}  — already done",
+                                f"  [skip] {method.upper():<5}  n={n}  "
+                                f"nu={nu}  ell={ell}  d={d}",
                                 flush=True,
                             )
                         continue
-                    if verbose:
-                        print(
-                            f"\n=== {method.upper():<5}  n={n}  nu={nu}  ell={ell}  d={d}  R={R} ===",
-                            flush=True,
-                        )
-                    rows = _sweep_config(
-                        method=method,
-                        n=n,
-                        nu=nu,
-                        ell=ell,
-                        d=d,
-                        seed=seed,
-                        R=R,
-                        n_fidelity=n_fidelity,
-                        verbose=verbose,
-                        dtype=dtype,
-                        chunk_size=chunk_size,
-                    )
-                    all_rows.extend(rows)
+                    work.append((method, n, nu, ell, R))
 
-                    # Flush after each config (crash safety)
-                    pd.DataFrame(all_rows).to_csv(csv_path, index=False)
+    t0 = time.time()
+
+    if n_jobs == 1:
+        # Sequential: flush CSV after each config for crash safety
+        for method, n, nu, ell, R in work:
+            if verbose:
+                print(
+                    f"\n=== {method.upper():<5}  n={n}  nu={nu}"
+                    f"  ell={ell}  d={d}  R={R} ===",
+                    flush=True,
+                )
+            rows = _sweep_config(
+                method=method, n=n, nu=nu, ell=ell, d=d,
+                seed=seed, R=R, n_fidelity=n_fidelity,
+                verbose=verbose, dtype=dtype,
+                chunk_size=chunk_size,
+            )
+            all_rows.extend(rows)
+            pd.DataFrame(all_rows).to_csv(csv_path, index=False)
+    else:
+        # Parallel: run configs across CPUs, flush once at end.
+        # Pin BLAS to 1 thread per worker to avoid oversubscription.
+        from joblib import Parallel, delayed
+        try:
+            from threadpoolctl import threadpool_limits
+            _ctx = threadpool_limits(limits=1)
+        except ImportError:
+            from contextlib import nullcontext
+            _ctx = nullcontext()
+        if verbose:
+            print(f"Running {len(work)} configs with n_jobs={n_jobs}",
+                  flush=True)
+        with _ctx:
+            results = Parallel(n_jobs=n_jobs, verbose=10 if verbose else 0)(
+                delayed(_sweep_config)(
+                    method=m, n=n, nu=nu, ell=ell, d=d,
+                    seed=seed, R=R, n_fidelity=n_fidelity,
+                    verbose=False, dtype=dtype,
+                    chunk_size=chunk_size,
+                )
+                for m, n, nu, ell, R in work
+            )
+        for rows in (results or []):
+            all_rows.extend(list(rows))  # type: ignore[arg-type]
 
     df = pd.DataFrame(all_rows)
     df.to_csv(csv_path, index=False)
@@ -798,6 +824,11 @@ def _parse_args(argv=None):
         "--resume", action="store_true",
         help="Skip configs already present in the output CSV.",
     )
+    parser.add_argument(
+        "--n_jobs", type=int, default=1,
+        help="Number of parallel workers (default 1 = sequential). "
+             "BLAS threads are pinned to 1 per worker to avoid oversubscription.",
+    )
     return parser.parse_args(argv)
 
 
@@ -833,5 +864,6 @@ if __name__ == "__main__":
         dtype=np.float32 if args.dtype == "float32" else np.float64,
         chunk_size=args.chunk_size,
         resume=args.resume,
+        n_jobs=args.n_jobs,
     )
     print(f"Output: {out}")

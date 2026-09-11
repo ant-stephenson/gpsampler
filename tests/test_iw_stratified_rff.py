@@ -512,6 +512,62 @@ class TestStratifiedRFF:
 
 
 # ---------------------------------------------------------------------------
+# Stratified pi_box test (mirrors verify_stratified_pibox.py)
+# ---------------------------------------------------------------------------
+
+class TestStratifiedPiBox:
+    """Covariance unbiasedness at truncated boxes (pi_box < 1).
+
+    Mirrors verify_stratified_pibox.py: the correct weight p/q must NOT
+    include a pi_box factor. A spurious pi_box on the weight biases the
+    covariance by ~20% when the box is narrow (pi_box ~ 0.8), invisible
+    at wide boxes (pi_box ~ 1).
+    """
+
+    def _run_pibox_config(self, target_pi, n_loc=50, ell=1.0, s2=1e-2,
+                          eta_val=0.5, D_loc=4000, reps=40, seed=0):
+        """Run one pi_box configuration, return (pi_box, correct_relerr)."""
+        from scipy.stats import norm as _norm
+
+        rng = np.random.default_rng(seed)
+        X_loc = rng.standard_normal((n_loc, 1))
+        diff = X_loc - X_loc.T
+        K = np.exp(-diff ** 2 / (2 * ell ** 2))
+
+        s = 1.0 / ell
+        B = float(_norm.ppf(0.5 + target_pi / 2.0, scale=s))
+        pi_box = _norm.cdf(B / s) - _norm.cdf(-B / s)
+
+        # Build using the real sampler with the specified box
+        box_scale = float(B / s)  # B = box_scale * s
+        Kbar = np.zeros((n_loc, n_loc))
+        for _ in range(reps):
+            Z = _build_stratified_rff_features(
+                X_loc, ell, s2, rng, D_loc,
+                eps=0.4, box_scale=box_scale, eta=eta_val,
+            )
+            Kbar += Z @ Z.T
+        Kbar /= reps
+
+        rel_err = np.linalg.norm(Kbar - K, "fro") / np.linalg.norm(K, "fro")
+        return pi_box, rel_err
+
+    def test_unbiased_at_narrow_box(self):
+        """Correct weight should be unbiased even with pi_box ~ 0.85."""
+        pi_box, rel_err = self._run_pibox_config(0.85)
+        assert rel_err < 0.10, (
+            f"stratified biased at pi_box={pi_box:.2f}: relerr={rel_err:.3f}"
+        )
+
+    def test_unbiased_at_very_narrow_box(self):
+        """Correct weight should be unbiased even with pi_box ~ 0.75."""
+        pi_box, rel_err = self._run_pibox_config(0.75)
+        assert rel_err < 0.10, (
+            f"stratified biased at pi_box={pi_box:.2f}: relerr={rel_err:.3f}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Setup and ratio bounds (mirrors verify_setup_and_ratios.py)
 # ---------------------------------------------------------------------------
 

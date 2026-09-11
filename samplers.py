@@ -1120,16 +1120,18 @@ def _build_stratified_rff_features(
     actual_eps = np.max(np.abs(np.exp(1j * zs) - acc))
     M_bound = n * (1.0 + actual_eps) ** 2 / s2
 
-    # ---- Rejection-sample frequencies ------------------------------------
-    # We need m frequencies total; first get a pilot batch for eta estimation
+    # ---- Rejection-sample pilot for eta estimation ------------------------
     n_pilot = min(m, 5000)
     omega_pilot, a_pilot, _ = _rejection_sample_vectorised(
         d, s, B, B_mat, alphas, M_bound, n_pilot, rng,
     )
 
-    # ---- Estimate d_l and T_l for optimal safeguard ---------------------
-    d_l = float(np.mean(a_pilot))
-    T_l = float(np.var(a_pilot))
+    # ---- d_l = E_p[a * 1_box]: average leverage under FULL p ------------
+    # The pilot samples come from the box-truncated Gaussian (in-box only).
+    # E_p[a * 1_box] = E_{p|box}[a] * pi_box = mean(a_pilot) * pi_box.
+    pi_box = (_norm.cdf(B, scale=s) - _norm.cdf(-B, scale=s)) ** d
+    d_l = float(np.mean(a_pilot)) * pi_box
+    T_l = float(np.var(a_pilot)) * pi_box**2  # Var under full p (approx)
 
     if eta is None:
         if T_l > 0 and d_l > 0:
@@ -1138,53 +1140,52 @@ def _build_stratified_rff_features(
         else:
             eta = 0.5
 
-    # ---- Get remaining frequencies if needed ----------------------------
-    if n_pilot < m:
-        omega_extra, a_extra, _ = _rejection_sample_vectorised(
-            d, s, B, B_mat, alphas, M_bound, m - n_pilot, rng,
-        )
-        omega_all = np.concatenate([omega_pilot, omega_extra], axis=0)
-        a_all = np.concatenate([a_pilot, a_extra])
-    else:
-        omega_all = omega_pilot[:m]
-        a_all = a_pilot[:m]
+    # ---- Draw m frequencies from mixture q = (1-eta)*g + eta*p ----------
+    # eta fraction: from FULL spectral density p (can be outside box)
+    # (1-eta) fraction: from rejection sampler (in box, proportional to a*p)
+    from gpsampler.leverage_reweighted_rff import spectral_sampler
 
-    # ---- IS weights with safeguard and pi_box ---------------------------
-    # q_eta proportional to: eta * p_trunc + (1-eta) * (a/d_l) * p_trunc
-    # IS ratio p / q = pi_box * p_trunc / (D/2 * q_eta_unnorm)
-    # But we need E[Z Z^T] = K_trunc.  The accepted frequencies already come
-    # from the rejection sampler's output distribution (proportional to a * p_trunc).
-    #
-    # The safeguarded mixture proposal is:
-    #   with prob eta: omega ~ p_trunc (truncated spectral density)
-    #   with prob 1-eta: omega ~ a(omega)/d_l * p_trunc  (rejection sampler)
-    #
-    # For our rejection-sampled frequencies, we can compute the IS weight:
-    #   w_j = p_trunc(omega_j) / q_eta(omega_j)
-    # where q_eta = eta * p_trunc + (1-eta) * a/d_l * p_trunc
-    #            = p_trunc * (eta + (1-eta) * a/d_l)
-    # So w_j = 1 / (eta + (1-eta) * a_j / d_l)
-    #
-    # For the full kernel (not truncated): multiply by pi_box to account for
-    # the mass outside the box. E[Z Z^T] with these weights gives K_trunc ≈ K.
+    from_p = rng.uniform(size=m) < eta
+    n_from_p = int(from_p.sum())
+    n_from_g = m - n_from_p
 
-    # Actually, let's be precise. We want E[Z Z^T] = K.
-    # The features use frequencies from the box. If we draw from q_eta supported
-    # on the box, then E[Z Z^T] = int_{box} (2 p(w) / q_eta(w)) cos/sin terms dw
-    # = (something proportional to K_trunc).
-    #
-    # For the defensive mixture where we mix between rejection-sampled and
-    # direct-from-p-trunc, all frequencies come from the box, so:
-    #   For feature j:  a_j^2 = 2 / (D * (eta + (1-eta) * lev_j / d_l))
-    # This gives E[Z Z^T] = K_trunc. The pi_box factor is only needed if we
-    # want E[Z Z^T] = K (not K_trunc), but since B is chosen large enough
-    # that K_trunc ≈ K, we omit it for simplicity.
-    #
-    # Actually, let's include pi_box as in the paper for correctness:
-    pi_box = (_norm.cdf(B, scale=s) - _norm.cdf(-B, scale=s)) ** d
+    omega_all = np.empty((m, d), dtype=np.float64)
+    a_all = np.zeros(m, dtype=np.float64)
 
-    ratio = 1.0 / (eta + (1.0 - eta) * a_all / d_l)  # IS ratio (bounded by 1/eta)
-    a_feat = np.sqrt(2.0 * pi_box * ratio / D)  # (m,)
+    # eta fraction: draw from full p
+    if n_from_p > 0:
+        omega_all[from_p] = spectral_sampler(n_from_p, d, "rbf", l, 1.5, rng)
+        # Compute leverage for those that land in box
+        in_box_p = np.all(np.abs(omega_all[from_p]) <= B, axis=1)
+        if in_box_p.any():
+            C_p = _taylor_coeffs_batch(omega_all[from_p][in_box_p], alphas)
+            a_p = _leverage_batch(C_p, B_mat)
+            a_all_p = np.zeros(n_from_p)
+            a_all_p[in_box_p] = a_p
+            a_all[from_p] = a_all_p
+
+    # (1-eta) fraction: draw from rejection sampler (in box)
+    if n_from_g > 0:
+        # Use remaining pilot or sample more
+        if n_from_g <= len(omega_pilot):
+            omega_all[~from_p] = omega_pilot[:n_from_g]
+            a_all[~from_p] = a_pilot[:n_from_g]
+        else:
+            omega_rej, a_rej, _ = _rejection_sample_vectorised(
+                d, s, B, B_mat, alphas, M_bound, n_from_g, rng,
+            )
+            omega_all[~from_p] = omega_rej
+            a_all[~from_p] = a_rej
+
+    # ---- IS weights: w = p / q with NO pi_box factor --------------------
+    # q(w) = (1-eta)*g(w) + eta*p(w)
+    # where g(w) = p(w)*a(w)/d_l for w in box, 0 outside
+    # For in-box: q = p*((1-eta)*a/d_l + eta), so p/q = 1/((1-eta)*a/d_l + eta)
+    # For out-of-box: q = eta*p (g=0), so p/q = 1/eta
+    in_box = np.all(np.abs(omega_all) <= B, axis=1)
+    ratio = np.full(m, 1.0 / eta)  # default: out-of-box weight
+    ratio[in_box] = 1.0 / (eta + (1.0 - eta) * a_all[in_box] / d_l)
+    a_feat = np.sqrt(2.0 * ratio / D)  # (m,)  NO pi_box here
 
     # ---- Feature matrix Z = [a*cos | a*sin] -----------------------------
     proj = x.astype(np.float64) @ omega_all.T  # (n, m)

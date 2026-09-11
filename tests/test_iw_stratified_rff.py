@@ -22,7 +22,10 @@ from gpsampler.samplers import (
     _taylor_coeffs_batch,
     _choose_taylor_order,
     _raw_gaussian_moments,
+    _truncated_normal_moments,
+    _matern_box_prob,
     _build_H_matrix,
+    _build_H_matrix_matern,
     _build_B_via_woodbury,
     _leverage_batch,
     _rejection_sample_vectorised,
@@ -482,13 +485,15 @@ class TestStratifiedRFF:
         assert Z.shape == (n, 200)
         assert np.all(np.isfinite(Z))
 
-    def test_se_only(self, X):
-        """Should raise for non-SE kernels."""
+    def test_matern_finite(self, X):
+        """Matérn kernel should produce finite samples."""
         rng = np.random.default_rng(22)
-        with pytest.raises(NotImplementedError, match="SE-only"):
-            sample_stratified_rff_from_x(
-                X, ks, nv, ls, rng, D=200, kernel_type="matern"
-            )
+        y, cov = sample_stratified_rff_from_x(
+            X, ks, nv, ls, rng, D=200, kernel_type="matern", nu=1.5,
+        )
+        assert y.shape == (n,)
+        assert np.isnan(cov)
+        assert np.all(np.isfinite(y))
 
     def test_odd_D_raises(self, X):
         rng = np.random.default_rng(30)
@@ -637,6 +642,149 @@ class TestOracleConstant:
             assert EDelta <= pre_neff_bound + 1e-9, (
                 f"E||Delta||^2={EDelta:.5f} > bound={pre_neff_bound:.5f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Matérn extension: moments, box probability, H matrix, covariance
+# ---------------------------------------------------------------------------
+
+class TestTruncatedNormalMoments:
+    """Verify _truncated_normal_moments recurrence against quad-based reference."""
+
+    @pytest.mark.parametrize("s,B", [(1.0, 3.0), (0.5, 2.0), (2.0, 5.0)])
+    def test_matches_quad(self, s, B):
+        max_deg = 12
+        ref = _raw_gaussian_moments(s, B, max_deg)
+        fast = _truncated_normal_moments(s, B, max_deg)
+        np.testing.assert_allclose(fast, ref, atol=1e-12, rtol=1e-10)
+
+    def test_odd_moments_zero(self):
+        mom = _truncated_normal_moments(1.0, 3.0, 10)
+        for k in range(1, 11, 2):
+            assert mom[k] == 0.0
+
+
+class TestMaternBoxProb:
+    """Verify _matern_box_prob against reference values."""
+
+    def test_d1_matches_t_cdf(self):
+        from scipy.stats import t as _t
+        for nu in [0.5, 1.5, 2.5]:
+            l, B = 1.0, 3.0
+            expected = float(2.0 * _t.cdf(B * l, df=2 * nu) - 1.0)
+            got = _matern_box_prob(l, B, nu, d=1)
+            np.testing.assert_allclose(got, expected, atol=1e-10)
+
+    def test_d2_matches_monte_carlo(self):
+        rng = np.random.default_rng(99)
+        nu, l, B = 1.5, 1.0, 3.0
+        n_mc = 200_000
+        g = rng.standard_normal((n_mc, 2))
+        u = rng.chisquare(2 * nu, size=(n_mc, 1))
+        omega = (g / l) * np.sqrt(2 * nu / u)
+        in_box = np.all(np.abs(omega) <= B, axis=1)
+        mc_prob = in_box.mean()
+        analytic = _matern_box_prob(l, B, nu, d=2)
+        np.testing.assert_allclose(analytic, mc_prob, atol=0.01)
+
+    def test_approaches_se_for_large_nu(self):
+        """As ν → ∞, Matérn → SE, so pi_box should converge."""
+        from scipy.stats import norm as _norm
+        l, B = 1.0, 3.0
+        se_pi = float((2.0 * _norm.cdf(B * l) - 1.0))
+        mat_pi = _matern_box_prob(l, B, nu=50.0, d=1)
+        np.testing.assert_allclose(mat_pi, se_pi, atol=0.01)
+
+
+class TestBuildHMatrixMatern:
+    """Verify _build_H_matrix_matern properties."""
+
+    def test_real_symmetric(self):
+        d_loc, R = 1, 4
+        alphas = _enumerate_multi_indices(d_loc, R)
+        H = _build_H_matrix_matern(alphas, l=1.0, B=3.0, nu=1.5, d=d_loc)
+        assert np.all(np.isfinite(H))
+        np.testing.assert_allclose(H, H.T, atol=1e-12)
+
+    def test_d1_matches_quad_moments(self):
+        """For d=1, H_matern should match quad-based 1D t-distribution moments."""
+        from scipy.integrate import quad
+        from scipy.stats import t as _t
+        d_loc, R = 1, 3
+        nu, l, B = 1.5, 1.0, 3.0
+        alphas = _enumerate_multi_indices(d_loc, R)
+
+        # Reference: compute raw moments of t-distribution over [-B, B]
+        df = 2 * nu
+        max_deg = 2 * R
+        ref_mom = np.zeros(max_deg + 1)
+        for k in range(0, max_deg + 1, 2):
+            integrand = lambda w, _k=k: w**_k * _t.pdf(w * l, df=df) * l
+            ref_mom[k], _ = quad(integrand, -B, B)
+
+        # Build H with reference moments
+        from math import factorial as _fact
+        r = len(alphas)
+        H_ref = np.zeros((r, r))
+        for i, a in enumerate(alphas):
+            for j, b in enumerate(alphas):
+                deg = a[0] + b[0]
+                total = sum(a) + sum(b)
+                afact = _fact(a[0])
+                bfact = _fact(b[0])
+                H_ref[i, j] = np.real(
+                    (1j ** total) * ref_mom[deg] / (afact * bfact)
+                )
+
+        H_mat = _build_H_matrix_matern(alphas, l, B, nu, d_loc)
+        np.testing.assert_allclose(H_mat, H_ref, atol=1e-8)
+
+    def test_converges_to_se_for_large_nu(self):
+        """H_matern(ν=large) ≈ H_se."""
+        d_loc, R = 1, 3
+        l, B = 1.0, 3.0
+        alphas = _enumerate_multi_indices(d_loc, R)
+
+        s = 1.0 / l
+        raw_mom = _raw_gaussian_moments(s, B, 2 * R)
+        H_se = _build_H_matrix(alphas, raw_mom, d_loc)
+
+        H_mat = _build_H_matrix_matern(alphas, l, B, nu=50.0, d=d_loc)
+        np.testing.assert_allclose(H_mat, H_se, atol=0.03)
+
+
+class TestStratifiedRFFMatern:
+    """End-to-end Matérn covariance test for the stratified Taylor RFF sampler."""
+
+    def test_covariance_matern_15(self, X):
+        """E[Z Z^T] ≈ K_matern for ν=1.5, d=1."""
+        nu = 1.5
+        K_mat = kernel_matrix(X, kind="matern", ell=ls, nu=nu)
+
+        reps = 50
+        D_cov = 2000
+        rng = np.random.default_rng(42)
+        Kbar = np.zeros((n, n))
+        for _ in range(reps):
+            Z = _build_stratified_rff_features(
+                X, ls, nv, rng, D_cov,
+                kernel_type="matern", nu=nu,
+            )
+            Kbar += Z @ Z.T
+        Kbar /= reps
+
+        rel_err = np.linalg.norm(Kbar - K_mat, "fro") / np.linalg.norm(K_mat, "fro")
+        assert rel_err < 0.30, f"Matérn 1.5 stratified relerr={rel_err:.3f}"
+
+    @pytest.mark.parametrize("nu", [0.5, 2.5])
+    def test_other_nu_finite(self, X, nu):
+        """Stratified RFF should produce finite samples for ν=0.5, 2.5."""
+        rng = np.random.default_rng(43)
+        y, _ = sample_stratified_rff_from_x(
+            X, ks, nv, ls, rng, D=200, kernel_type="matern", nu=nu,
+        )
+        assert y.shape == (n,)
+        assert np.all(np.isfinite(y))
 
 
 # ---------------------------------------------------------------------------

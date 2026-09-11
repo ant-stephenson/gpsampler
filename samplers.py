@@ -676,6 +676,109 @@ def _log_spectral_density(
 # Sampler: Safeguarded importance-weighted RFF (IW-RFF)
 # ---------------------------------------------------------------------------
 
+
+def _build_iw_rff_features(
+    x: np.ndarray,
+    l: float,
+    rng: np.random.Generator,
+    D: int,
+    eta: float = 0.5,
+    guard_scale: float = None,
+    g_sampler: Callable = None,
+    g_logpdf: Callable = None,
+    kernel_type: str = "rbf",
+    nu: float = 1.5,
+) -> np.ndarray:
+    """Build IW-RFF feature matrix Z such that E[Z @ Z.T] = K.
+
+    Frequencies are drawn from q_eta = (1 - eta)*g + eta*p where p is the
+    kernel spectral density and g is a heavier-tailed guard.  Default g = p
+    recovers plain RFF (the safest choice; supply guard_scale < 1 for a
+    broadened guard).
+
+    Parameters
+    ----------
+    x           : (n, d) input locations
+    l           : kernel lengthscale
+    rng         : numpy Generator
+    D           : total feature dimension (must be even)
+    eta         : mixture fraction on p, in (0, 1].  eta=1 ⟹ plain RFF.
+    guard_scale : if given, g = spectral density with lengthscale l*guard_scale
+    g_sampler   : callable(n_samples, d, rng) -> (n_samples, d) frequencies
+    g_logpdf    : callable(omega) -> (F,) log-density of g
+    kernel_type : 'rbf'/'se' or 'matern'
+    nu          : Matern smoothness (ignored for RBF)
+
+    Returns
+    -------
+    Z : (n, D) feature matrix with block layout [cos | sin].
+    """
+    if D % 2 != 0:
+        raise ValueError("D must be even")
+    if not (0.0 < eta <= 1.0):
+        raise ValueError(f"eta must be in (0, 1]; got {eta}")
+
+    n, d = x.shape
+    m = D // 2
+    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
+
+    from gpsampler.leverage_reweighted_rff import spectral_sampler
+
+    # ---- Build guard if needed ------------------------------------------
+    if eta >= 1.0:
+        # Plain RFF: all from p, uniform weight
+        omega = spectral_sampler(m, d, kind, l, nu, rng)
+        Z = np.empty((n, D), dtype=np.float64)
+        proj = x.astype(np.float64) @ omega.T
+        Z[:, :m] = np.sqrt(2.0 / D) * np.cos(proj)
+        Z[:, m:] = np.sqrt(2.0 / D) * np.sin(proj)
+        return Z
+
+    have_custom_g = (g_sampler is not None and g_logpdf is not None)
+    if not have_custom_g:
+        if guard_scale is None:
+            guard_scale = 1.0  # g = p when no guard specified
+        if not (0.0 < guard_scale <= 1.0):
+            raise ValueError(f"guard_scale must be in (0, 1]; got {guard_scale}")
+        l_guard = l * guard_scale
+
+        def _g_sampler(n_samp, _d, _rng):
+            return spectral_sampler(n_samp, _d, kind, l_guard, nu, _rng)
+
+        def _g_logpdf(omega):
+            return _log_spectral_density(omega, kind, l_guard, nu, omega.shape[1])
+
+        g_sampler = _g_sampler
+        g_logpdf = _g_logpdf
+
+    # ---- 1. Draw from mixture q_eta = (1-eta)*g + eta*p -----------------
+    from_p = rng.uniform(size=m) < eta
+    n_from_p = int(from_p.sum())
+    n_from_g = m - n_from_p
+
+    omega = np.empty((m, d), dtype=np.float64)
+    if n_from_p > 0:
+        omega[from_p] = spectral_sampler(n_from_p, d, kind, l, nu, rng)
+    if n_from_g > 0:
+        omega[~from_p] = g_sampler(n_from_g, d, rng)
+
+    # ---- 2. IS weights: a_j = sqrt(2 p / (D * q_eta)) ------------------
+    log_p = _log_spectral_density(omega, kind, l, nu, d)
+    log_g = g_logpdf(omega)
+    log_q = np.logaddexp(
+        np.log(1.0 - eta) + log_g,
+        np.log(eta) + log_p,
+    )
+    a = np.sqrt(2.0 * np.exp(log_p - log_q) / D)  # (m,)
+
+    # ---- 3. Feature matrix Z = [a*cos(X omega^T) | a*sin(X omega^T)] ---
+    proj = x.astype(np.float64) @ omega.T  # (n, m)
+    Z = np.empty((n, D), dtype=np.float64)
+    Z[:, :m] = a[None, :] * np.cos(proj)
+    Z[:, m:] = a[None, :] * np.sin(proj)
+    return Z
+
+
 def sample_iw_rff_from_x(
     x: np.ndarray,
     sigma: float,
@@ -683,106 +786,413 @@ def sample_iw_rff_from_x(
     l: float,
     rng: np.random.Generator,
     D: int,
-    rho: float = 0.1,
-    guard_scale: float = 0.5,
+    eta: float = 0.5,
+    guard_scale: float = None,
+    g_sampler: Callable = None,
+    g_logpdf: Callable = None,
     kernel_type: str = "rbf",
     nu: float = 1.5,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Safeguarded importance-weighted RFF (IW-RFF) GP prior sampler.
+) -> Tuple[np.ndarray, float]:
+    """Safeguarded importance-weighted RFF GP prior sampler.
 
-    Draws D//2 frequencies from the mixture proposal
+    Draws D//2 frequencies from the defensive mixture
 
-        q_rho(omega) = (1 - rho) * p(omega) + rho * g(omega)
+        q_eta(omega) = (1 - eta) * g(omega) + eta * p(omega)
 
-    where p is the kernel's spectral density and g is the same spectral family
-    with lengthscale l_guard = l * guard_scale < l (guard_scale < 1 gives g
-    heavier tails than p in frequency space).  Each frequency is importance-
-    weighted by the bounded ratio p(omega) / q_rho(omega) in [1-rho, 1], giving
-    a covariance-unbiased feature matrix: E[Phi @ Phi.T] = sigma * K.
+    where p is the kernel spectral density and g is a guard proposal.
+    Each frequency is importance-weighted by p / q_eta so that
+    E[Z Z^T] = K exactly.
+
+    Returns (y_noise, np.nan) — no n×n matrix is formed.
+    """
+    n = x.shape[0]
+    Z = _build_iw_rff_features(
+        x, l, rng, D,
+        eta=eta,
+        guard_scale=guard_scale,
+        g_sampler=g_sampler,
+        g_logpdf=g_logpdf,
+        kernel_type=kernel_type,
+        nu=nu,
+    )
+    Z = float(np.sqrt(sigma)) * Z
+    w = rng.standard_normal(D)
+    y_noise = Z @ w + rng.normal(scale=float(np.sqrt(noise_var)), size=n)
+    return y_noise, np.nan
+
+
+# ---------------------------------------------------------------------------
+# Sampler: Stratified truncated-Taylor RFF
+# ---------------------------------------------------------------------------
+
+def _enumerate_multi_indices(d: int, R: int):
+    """All d-tuples alpha with |alpha| <= R, sorted by total degree."""
+    from itertools import product as _product
+    return sorted(
+        [a for a in _product(range(R + 1), repeat=d) if sum(a) <= R],
+        key=lambda a: (sum(a), a),
+    )
+
+
+def _monomial_design(X: np.ndarray, alphas: list) -> np.ndarray:
+    """Build monomial design matrix Phi (n, r) for multi-indices alphas."""
+    n, d = X.shape
+    r = len(alphas)
+    Phi = np.ones((n, r), dtype=np.float64)
+    for col, a in enumerate(alphas):
+        for j in range(d):
+            if a[j] > 0:
+                Phi[:, col] *= X[:, j] ** a[j]
+    return Phi
+
+
+def _taylor_coeffs_batch(omega: np.ndarray, alphas: list) -> np.ndarray:
+    """Taylor coefficients c_alpha(omega) = i^{|alpha|} / alpha! * omega^alpha.
 
     Parameters
     ----------
-    x           : (n, d) input locations
-    sigma       : kernel output scale
-    noise_var   : observation noise variance
-    l           : kernel lengthscale
-    rng         : numpy random Generator
-    D           : number of RFF features (must be even)
-    rho         : guard mixture weight rho in (0, 1); default 0.1
-    guard_scale : l_guard = l * guard_scale; must be in (0, 1).  Default 0.5.
-    kernel_type : 'rbf'/'se' or 'matern'
-    nu          : Matern smoothness (ignored for RBF); default 1.5
+    omega  : (F, d) frequency array
+    alphas : list of d-tuples
 
     Returns
     -------
-    y_noise    : (n,) sample with covariance approx sigma*K + noise_var*I
-    approx_cov : (n, n) IS-reweighted Phi @ Phi.T + noise_var * I
+    C : (F, r) complex array
     """
+    from math import factorial as _fact
+    F, d = omega.shape
+    r = len(alphas)
+    C = np.empty((F, r), dtype=np.complex128)
+    for col, a in enumerate(alphas):
+        afact = 1
+        for ai in a:
+            afact *= _fact(ai)
+        coeff = (1j ** sum(a)) / afact
+        col_val = np.ones(F, dtype=np.complex128)
+        for j in range(d):
+            if a[j] > 0:
+                col_val *= omega[:, j] ** a[j]
+        C[:, col] = coeff * col_val
+    return C
+
+
+def _choose_taylor_order(Z_max: float, eps: float = 0.4) -> int:
+    """Smallest R such that sup_{|z|<=Z_max} |e^{iz} - T_R(iz)| <= eps."""
+    zs = np.linspace(-Z_max, Z_max, 400)
+    for R in range(1, 200):
+        term = np.ones_like(zs, dtype=complex)
+        acc = term.copy()
+        for k in range(1, R + 1):
+            term = term * (1j * zs) / k
+            acc = acc + term
+        if np.max(np.abs(np.exp(1j * zs) - acc)) <= eps:
+            return R
+    return 200
+
+
+def _raw_gaussian_moments(s: float, B: float, max_deg: int) -> np.ndarray:
+    """Compute M_k = int_{-B}^{B} w^k * N(w; 0, s^2) dw for k=0..max_deg.
+
+    Uses scipy.integrate.quad for accuracy.  For SE kernels the spectral
+    density is N(0, 1/l^2) so s = 1/l.
+    """
+    from scipy.integrate import quad
+    from scipy.stats import norm as _norm
+    moments = np.zeros(max_deg + 1)
+    for k in range(max_deg + 1):
+        integrand = lambda w, _k=k: w**_k * _norm.pdf(w, scale=s)
+        moments[k], _ = quad(integrand, -B, B)
+    return moments
+
+
+def _build_H_matrix(alphas: list, raw_mom: np.ndarray, d: int) -> np.ndarray:
+    """Build H (r, r) real matrix where H[a,b] = prod_j M_{a_j+b_j}.
+
+    For SE kernels H is real because odd moments vanish and the complex
+    pre-factor i^{|a|+|b|} / (a! b!) produces real entries when combined
+    with the moment parity.
+    """
+    from math import factorial as _fact
+    r = len(alphas)
+    H = np.zeros((r, r), dtype=np.float64)
+    for i, a in enumerate(alphas):
+        for j, b in enumerate(alphas):
+            val = 1.0
+            for dim in range(d):
+                val *= raw_mom[a[dim] + b[dim]]
+            # pre-factor: i^{|a|+|b|} / (a! b!)
+            total_deg = sum(a) + sum(b)
+            # i^k is real iff k is even — and M_k = 0 for odd k (symmetric),
+            # so the product is always real for SE.
+            i_pow = (1j ** total_deg)
+            afact = 1
+            bfact = 1
+            for ai in a:
+                afact *= _fact(ai)
+            for bi in b:
+                bfact *= _fact(bi)
+            H[i, j] = np.real(i_pow * val / (afact * bfact))
+    return H
+
+
+def _build_B_via_woodbury(Phi: np.ndarray, H: np.ndarray,
+                          s2: float) -> np.ndarray:
+    """B = Phi^T (Phi H Phi^T + s2 I)^{-1} Phi via Woodbury.
+
+    Cost: O(n r^2 + r^3) — never forms n×n matrices.
+
+    Returns B (r, r) symmetric positive semi-definite.
+    """
+    # Woodbury: (s2 I + Phi H Phi^T)^{-1} = s2^{-1} I - s2^{-2} Phi (H^{-1} + s2^{-1} Phi^T Phi)^{-1} Phi^T
+    # B = Phi^T inv(A_R) Phi = s2^{-1} Phi^T Phi - s2^{-2} Phi^T Phi (H^{-1} + s2^{-1} Phi^T Phi)^{-1} Phi^T Phi
+    # Let G = Phi^T Phi (r, r).  Then B = G/s2 - G/s2^2 (H^{-1} + G/s2)^{-1} G
+    # = G/s2 (I - (s2 H^{-1} + G)^{-1} G)
+    # Simpler: B = Phi^T inv(A_R) Phi.  With A_R = Phi H Phi^T + s2 I:
+    #   inv(A_R) Phi = s2^{-1}(Phi - Phi (H^{-1} + G/s2)^{-1} G/s2)  ... messy.
+    # Direct: B = (H^{-1} + G/s2)^{-1} / s2  ... let's derive cleanly.
+    #
+    # From Woodbury on the r×r side:
+    #   Phi^T (Phi H Phi^T + s2 I)^{-1} Phi = H^{-1} (H^{-1} + Phi^T Phi / s2)^{-1} Phi^T Phi / s2
+    #
+    # Actually the standard push-through identity gives:
+    #   Phi^T (Phi H Phi^T + s2 I)^{-1} = (H^{-1} + Phi^T Phi / s2)^{-1} Phi^T / s2  ... when H invertible.
+    #
+    # So B = Phi^T inv(A_R) Phi = (H^{-1} + G/s2)^{-1} G / s2
+    # But we want numerical stability when H is near-singular.
+    #
+    # Best approach: form M = s2 * H^{-1} + G, then B = H (M^{-1}) G = (M^{-1} G)^T s2 ... no.
+    # Let's just use the matrix inversion lemma more carefully:
+    #   B = Phi^T inv(A_R) Phi
+    # Let L = cholesky(H).  Let V = Phi L (n, r).  Then A_R = V V^T + s2 I.
+    # B = L^T V^T (V V^T + s2 I)^{-1} V L
+    # Inner part: V^T (V V^T + s2 I)^{-1} V = I - s2 (V^T V + s2 I)^{-1}   [push-through]
+    # So B = L^T (I - s2 (V^T V + s2 I)^{-1}) L = L^T L - s2 L^T (V^T V + s2 I)^{-1} L
+    # = H - s2 L^T (V^T V + s2 I)^{-1} L
+
+    r = Phi.shape[1]
+    G = Phi.T @ Phi  # (r, r)
+
+    # Regularise H for Cholesky
+    H_reg = H + 1e-12 * np.eye(r)
+    try:
+        L = np.linalg.cholesky(H_reg)
+    except np.linalg.LinAlgError:
+        # H may be singular/near-singular; fall back to eigendecomposition
+        evals, evecs = np.linalg.eigh(H_reg)
+        evals = np.maximum(evals, 1e-12)
+        L = evecs * np.sqrt(evals)  # (r, r) "pseudo-Cholesky" V = Phi @ L
+
+    VtV = L.T @ G @ L  # (r, r)  = (Phi L)^T (Phi L)
+    M = VtV + s2 * np.eye(r)
+    # B = Phi^T inv(A_R) Phi = H - s2 L^T inv(V^T V + s2 I) L
+    M_inv = np.linalg.solve(M, np.eye(r))
+    B = H_reg - s2 * (L.T @ M_inv @ L)
+    # Symmetrise
+    B = 0.5 * (B + B.T)
+    return B
+
+
+def _leverage_batch(C: np.ndarray, B_mat: np.ndarray) -> np.ndarray:
+    """Compute leverage a(omega) = Re(c)^T B Re(c) + Im(c)^T B Im(c).
+
+    Parameters
+    ----------
+    C     : (F, r) complex Taylor coefficient matrix
+    B_mat : (r, r) real symmetric Woodbury factor
+
+    Returns
+    -------
+    a : (F,) leverage scores (non-negative)
+    """
+    Cr = C.real  # (F, r)
+    Ci = C.imag  # (F, r)
+    # a_j = Cr[j] @ B @ Cr[j] + Ci[j] @ B @ Ci[j]
+    a = np.sum((Cr @ B_mat) * Cr, axis=1) + np.sum((Ci @ B_mat) * Ci, axis=1)
+    return np.maximum(a, 0.0)
+
+
+def _rejection_sample_vectorised(
+    d: int, s: float, B: float,
+    B_mat: np.ndarray, alphas: list, M_bound: float,
+    n_accept: int, rng: np.random.Generator,
+    batch: int = 20000,
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """Rejection-sample frequencies from box-truncated Gaussian weighted by leverage.
+
+    Proposes from N(0, s^2 I_d) | [-B,B]^d, accepts with prob a(omega)/M_bound.
+
+    Returns
+    -------
+    omega_acc : (n_accept, d) accepted frequencies
+    a_acc     : (n_accept,) leverage at accepted frequencies
+    n_proposed: total proposals made
+    """
+    from scipy.stats import truncnorm as _tn
+    a_tn, b_tn = -B / s, B / s
+    collected_w = []
+    collected_a = []
+    total_proposed = 0
+
+    while sum(len(c) for c in collected_w) < n_accept:
+        # Propose a batch
+        omega = np.empty((batch, d), dtype=np.float64)
+        for j in range(d):
+            omega[:, j] = _tn.rvs(a_tn, b_tn, loc=0, scale=s, size=batch,
+                                   random_state=rng)
+        C = _taylor_coeffs_batch(omega, alphas)
+        a_vals = _leverage_batch(C, B_mat)
+        accept = rng.uniform(size=batch) * M_bound <= a_vals
+        total_proposed += batch
+        if accept.any():
+            collected_w.append(omega[accept])
+            collected_a.append(a_vals[accept])
+
+    omega_all = np.concatenate(collected_w, axis=0)[:n_accept]
+    a_all = np.concatenate(collected_a)[:n_accept]
+    return omega_all, a_all, total_proposed
+
+
+def _build_stratified_rff_features(
+    x: np.ndarray,
+    l: float,
+    noise_var: float,
+    rng: np.random.Generator,
+    D: int,
+    eps: float = 0.4,
+    box_scale: float = 3.0,
+    eta: float = None,
+    rank_cap: int = 5000,
+) -> np.ndarray:
+    """Build stratified truncated-Taylor RFF features for SE kernel.
+
+    SE-only (single spectral component).  The algorithm:
+    1. Choose Taylor order R from input-box radius and eps.
+    2. Build monomial design Phi (n, r), moment matrix H, Woodbury B.
+    3. Rejection-sample frequencies from box-truncated Gaussian weighted by leverage.
+    4. Compute optimal safeguard eta* if not given.
+    5. Build IS-weighted features Z with E[Z Z^T] = K_trunc ≈ K.
+
+    Returns Z (n, D).
+    """
+    from scipy.stats import norm as _norm
+
     if D % 2 != 0:
         raise ValueError("D must be even")
-    if not (0.0 < rho < 1.0):
-        raise ValueError(f"rho must be in (0, 1); got {rho}")
-    if not (0.0 < guard_scale < 1.0):
-        raise ValueError(
-            f"guard_scale must be in (0, 1) for heavier guard tails; got {guard_scale}"
-        )
-
     n, d = x.shape
-    n_freq = D // 2
-    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
-    l_guard = l * guard_scale
+    m = D // 2
+    s2 = noise_var
 
-    # ------------------------------------------------------------------
-    # 1. Sample n_freq frequencies from mixture q_rho = (1-rho)*p + rho*g
-    # ------------------------------------------------------------------
-    from_p = rng.uniform(size=n_freq) < (1.0 - rho)  # True -> from p
-    n_from_p = int(from_p.sum())
-    n_from_g = n_freq - n_from_p
+    # ---- Spectral scale and box -----------------------------------------
+    s = 1.0 / l  # SE spectral std
+    B = box_scale * s  # frequency box half-width
 
-    from gpsampler.leverage_reweighted_rff import spectral_sampler
+    # ---- Taylor order ---------------------------------------------------
+    Bx = np.max(np.abs(x))
+    Z_max = Bx * B * np.sqrt(d) if d > 1 else Bx * B
+    R = _choose_taylor_order(Z_max, eps)
+    alphas = _enumerate_multi_indices(d, R)
+    r = len(alphas)
+    if r > rank_cap:
+        # Reduce R until r fits
+        while r > rank_cap and R > 1:
+            R -= 1
+            alphas = _enumerate_multi_indices(d, R)
+            r = len(alphas)
 
-    omega_p = spectral_sampler(n_from_p, d, kind, l,       nu, rng)  # (n_from_p, d)
-    omega_g = spectral_sampler(n_from_g, d, kind, l_guard, nu, rng)  # (n_from_g, d)
+    # ---- Monomial design Phi (n, r) -------------------------------------
+    Phi = _monomial_design(x, alphas)
 
-    omega = np.empty((n_freq, d), dtype=np.float64)
-    omega[from_p]  = omega_p
-    omega[~from_p] = omega_g
+    # ---- Moment matrix H (r, r) -----------------------------------------
+    max_deg = 2 * R
+    raw_mom = _raw_gaussian_moments(s, B, max_deg)
+    H = _build_H_matrix(alphas, raw_mom, d)
 
-    # ------------------------------------------------------------------
-    # 2. IS weights r(omega) = p(omega) / q_rho(omega)
-    #    q_rho >= (1-rho)*p  so  r <= 1/(1-rho)  always.
-    # ------------------------------------------------------------------
-    log_p = _log_spectral_density(omega, kind, l,       nu, d)  # (n_freq,)
-    log_g = _log_spectral_density(omega, kind, l_guard, nu, d)  # (n_freq,)
+    # ---- Woodbury B = Phi^T inv(A_R) Phi --------------------------------
+    B_mat = _build_B_via_woodbury(Phi, H, s2)
 
-    log_q = np.logaddexp(np.log1p(-rho) + log_p, np.log(rho) + log_g)
-    log_r = log_p - log_q  # log IS weight, in [log(1-rho), 0]
-    r = np.exp(log_r)       # in [1-rho, 1]
+    # ---- Leverage bound M -----------------------------------------------
+    # Verify eps: compute actual Taylor error on a small grid
+    zs = np.linspace(-Z_max, Z_max, 400) if Z_max > 0 else np.array([0.0])
+    term = np.ones_like(zs, dtype=complex)
+    acc = term.copy()
+    for k in range(1, R + 1):
+        term = term * (1j * zs) / k
+        acc = acc + term
+    actual_eps = np.max(np.abs(np.exp(1j * zs) - acc))
+    M_bound = n * (1.0 + actual_eps) ** 2 / s2
 
-    # ------------------------------------------------------------------
-    # 3. IS-reweighted feature matrix Phi (n x D)
-    #    g_j = sqrt(r_j / n_freq)  so  Phi @ Phi.T = sigma * sum_j r_j/n_freq M_j
-    #    E[Phi @ Phi.T] = sigma * E_p[M(omega)] = sigma * K
-    # ------------------------------------------------------------------
-    g_j = np.sqrt(r / n_freq)                      # (n_freq,)
-    proj = x.astype(np.float64) @ omega.T          # (n, n_freq)
-    sq_sigma = float(np.sqrt(sigma))
-    Phi = np.empty((n, D), dtype=np.float64)
-    Phi[:, 0::2] = sq_sigma * g_j * np.cos(proj)
-    Phi[:, 1::2] = sq_sigma * g_j * np.sin(proj)
+    # ---- Rejection-sample frequencies ------------------------------------
+    # We need m frequencies total; first get a pilot batch for eta estimation
+    n_pilot = min(m, 5000)
+    omega_pilot, a_pilot, _ = _rejection_sample_vectorised(
+        d, s, B, B_mat, alphas, M_bound, n_pilot, rng,
+    )
 
-    # ------------------------------------------------------------------
-    # 4. Draw prior sample and add observation noise
-    # ------------------------------------------------------------------
-    z = rng.standard_normal(D)
-    y_noise = Phi @ z + rng.normal(scale=float(np.sqrt(noise_var)), size=n)
-    approx_cov = Phi @ Phi.T + noise_var * np.eye(n)
-    return y_noise, approx_cov
+    # ---- Estimate d_l and T_l for optimal safeguard ---------------------
+    d_l = float(np.mean(a_pilot))
+    T_l = float(np.var(a_pilot))
 
+    if eta is None:
+        if T_l > 0 and d_l > 0:
+            eta = np.sqrt(T_l) / (d_l + np.sqrt(T_l))
+            eta = np.clip(eta, 0.01, 0.99)
+        else:
+            eta = 0.5
 
-# ---------------------------------------------------------------------------
-# Sampler: Stratified truncated-Taylor leverage-reweighted RFF
-# ---------------------------------------------------------------------------
+    # ---- Get remaining frequencies if needed ----------------------------
+    if n_pilot < m:
+        omega_extra, a_extra, _ = _rejection_sample_vectorised(
+            d, s, B, B_mat, alphas, M_bound, m - n_pilot, rng,
+        )
+        omega_all = np.concatenate([omega_pilot, omega_extra], axis=0)
+        a_all = np.concatenate([a_pilot, a_extra])
+    else:
+        omega_all = omega_pilot[:m]
+        a_all = a_pilot[:m]
+
+    # ---- IS weights with safeguard and pi_box ---------------------------
+    # q_eta proportional to: eta * p_trunc + (1-eta) * (a/d_l) * p_trunc
+    # IS ratio p / q = pi_box * p_trunc / (D/2 * q_eta_unnorm)
+    # But we need E[Z Z^T] = K_trunc.  The accepted frequencies already come
+    # from the rejection sampler's output distribution (proportional to a * p_trunc).
+    #
+    # The safeguarded mixture proposal is:
+    #   with prob eta: omega ~ p_trunc (truncated spectral density)
+    #   with prob 1-eta: omega ~ a(omega)/d_l * p_trunc  (rejection sampler)
+    #
+    # For our rejection-sampled frequencies, we can compute the IS weight:
+    #   w_j = p_trunc(omega_j) / q_eta(omega_j)
+    # where q_eta = eta * p_trunc + (1-eta) * a/d_l * p_trunc
+    #            = p_trunc * (eta + (1-eta) * a/d_l)
+    # So w_j = 1 / (eta + (1-eta) * a_j / d_l)
+    #
+    # For the full kernel (not truncated): multiply by pi_box to account for
+    # the mass outside the box. E[Z Z^T] with these weights gives K_trunc ≈ K.
+
+    # Actually, let's be precise. We want E[Z Z^T] = K.
+    # The features use frequencies from the box. If we draw from q_eta supported
+    # on the box, then E[Z Z^T] = int_{box} (2 p(w) / q_eta(w)) cos/sin terms dw
+    # = (something proportional to K_trunc).
+    #
+    # For the defensive mixture where we mix between rejection-sampled and
+    # direct-from-p-trunc, all frequencies come from the box, so:
+    #   For feature j:  a_j^2 = 2 / (D * (eta + (1-eta) * lev_j / d_l))
+    # This gives E[Z Z^T] = K_trunc. The pi_box factor is only needed if we
+    # want E[Z Z^T] = K (not K_trunc), but since B is chosen large enough
+    # that K_trunc ≈ K, we omit it for simplicity.
+    #
+    # Actually, let's include pi_box as in the paper for correctness:
+    pi_box = (_norm.cdf(B, scale=s) - _norm.cdf(-B, scale=s)) ** d
+
+    ratio = 1.0 / (eta + (1.0 - eta) * a_all / d_l)  # IS ratio (bounded by 1/eta)
+    a_feat = np.sqrt(2.0 * pi_box * ratio / D)  # (m,)
+
+    # ---- Feature matrix Z = [a*cos | a*sin] -----------------------------
+    proj = x.astype(np.float64) @ omega_all.T  # (n, m)
+    Z = np.empty((n, D), dtype=np.float64)
+    Z[:, :m] = a_feat[None, :] * np.cos(proj)
+    Z[:, m:] = a_feat[None, :] * np.sin(proj)
+    return Z
+
 
 def sample_stratified_rff_from_x(
     x: np.ndarray,
@@ -791,154 +1201,36 @@ def sample_stratified_rff_from_x(
     l: float,
     rng: np.random.Generator,
     D: int,
-    taylor_order: int = 2,
-    nystrom_rank: int = 50,
-    pool_factor: int = 5,
+    eps: float = 0.4,
+    box_scale: float = 3.0,
+    eta: float = None,
+    rank_cap: int = 5000,
     kernel_type: str = "rbf",
     nu: float = 1.5,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Stratified truncated-Taylor leverage-reweighted RFF GP prior sampler.
+) -> Tuple[np.ndarray, float]:
+    """Stratified truncated-Taylor RFF GP prior sampler (SE-only).
 
-    Extends sample_lrff_from_x with two improvements:
+    Implements the paper's Algorithm 1: Taylor polynomial feature map,
+    Woodbury leverage scoring, rejection sampling from box-truncated
+    Gaussian, and safeguarded importance weighting.
 
-    1. **Stratified pool**: the P = pool_factor * D//2 candidate frequencies
-       are drawn from a stratified base distribution rather than i.i.d.
-       Equal-probability radial strata under the spectral CDF ensure uniform
-       coverage, giving a lower-variance estimate of Z_hat = E_p[alpha].
-
-    2. **Truncated-Taylor surrogate + rejection step**: a degree-taylor_order
-       polynomial alpha_hat(r) = sum_{k=0}^{T} c_k r^{2k}  (r = ||omega||)
-       is fit by least squares to the pool's leverage scores.  Each pool
-       candidate is then accepted/rejected with probability
-       alpha(omega) / max(alpha_hat(||omega||), alpha(omega)), thinning the
-       pool towards high-leverage frequencies before the SIR step.
-
-    After rejection, n_freq frequencies are drawn by SIR proportional to
-    exact leverage and corrected by Z_hat/alpha IS weights for unbiasedness.
-
-    Parameters
-    ----------
-    x            : (n, d) input locations
-    sigma        : kernel output scale
-    noise_var    : observation noise variance
-    l            : kernel lengthscale
-    rng          : numpy random Generator
-    D            : number of RFF features (must be even)
-    taylor_order : degree T for the radial leverage surrogate; default 2
-    nystrom_rank : Nyström rank for the Woodbury leverage; default 50
-    pool_factor  : pool size P = pool_factor * D//2; default 5
-    kernel_type  : 'rbf'/'se' or 'matern'
-    nu           : Matern smoothness (ignored for RBF); default 1.5
-
-    Returns
-    -------
-    y_noise    : (n,) sample approx ~ GP(0, K_xi)
-    approx_cov : (n, n) Phi @ Phi.T + noise_var * I
+    Returns (y_noise, np.nan) — no n×n matrix is formed.
     """
-    if D % 2 != 0:
-        raise ValueError("D must be even")
-
-    n, d = x.shape
-    n_freq = D // 2
-    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
-    P = max(pool_factor * n_freq, n_freq + 1)
-
-    # ------------------------------------------------------------------
-    # 1. Stratified radial pool from p
-    #    Divide [0,1) into P equal strata, place one stratified-uniform
-    #    point per stratum, map through the spectral radial quantile.
-    # ------------------------------------------------------------------
-    u_strat = (np.arange(P) + rng.uniform(size=P)) / P  # (P,) in (0, 1)
-
-    if kind in ("rbf", "se"):
-        from scipy.stats import chi
-        radii = chi.ppf(u_strat, df=d) / l          # (P,) chi(d)/l quantiles
-    elif kind == "matern":
-        from scipy.stats import chi2, chi as _chi
-        # Matérn: ||omega|| = chi(d)/l * sqrt(2*nu / u_scale), u_scale ~ chi2(2*nu).
-        # Stratify the heavy-tailed chi2(2*nu) component.
-        u_scale = np.maximum(chi2.ppf(u_strat, df=2.0 * nu), 1e-10)
-        g_norms = _chi.rvs(df=d, size=P, random_state=rng)
-        radii = (g_norms / l) * np.sqrt(2.0 * nu / u_scale)
-    else:
-        raise ValueError(
-            f"unsupported kernel_type {kernel_type!r}; choose 'rbf' or 'matern'"
+    if kernel_type not in ("rbf", "se"):
+        raise NotImplementedError(
+            f"Stratified Taylor RFF is SE-only for now; got kernel_type={kernel_type!r}"
         )
-
-    dirs = rng.standard_normal((P, d))
-    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-30
-    pool = radii[:, None] * dirs          # (P, d)
-
-    # ------------------------------------------------------------------
-    # 2. Woodbury leverage scoring for all pool candidates
-    # ------------------------------------------------------------------
-    from gpsampler.leverage_reweighted_rff import (
-        kernel_matrix, nystrom_factor, ApproxLeverage
+    n = x.shape[0]
+    Z = _build_stratified_rff_features(
+        x, l, noise_var, rng, D,
+        eps=eps, box_scale=box_scale, eta=eta, rank_cap=rank_cap,
     )
-    K_mat = kernel_matrix(x, kind, l, nu)
-    rank = min(nystrom_rank, n)
-    landmarks = rng.choice(n, size=rank, replace=False)
-    B = nystrom_factor(K_mat, landmarks)
-    alpha_fn = ApproxLeverage(x, B, noise_var)
+    Z = float(np.sqrt(sigma)) * Z
+    w = rng.standard_normal(D)
+    y_noise = Z @ w + rng.normal(scale=float(np.sqrt(noise_var)), size=n)
+    return y_noise, np.nan
 
-    alpha_pool = np.maximum(alpha_fn(pool), 1e-12)   # (P,)
 
-    # ------------------------------------------------------------------
-    # 3. Fit truncated-Taylor surrogate  alpha_hat(r) = sum_k c_k r^{2k}
-    #    by least squares in the variable r^2.
-    # ------------------------------------------------------------------
-    sq_radii = radii ** 2                             # (P,)
-    T = int(taylor_order)
-    V = np.column_stack([sq_radii ** k for k in range(T + 1)])  # (P, T+1)
-    coeffs, *_ = np.linalg.lstsq(V, alpha_pool, rcond=None)
-    alpha_hat = np.maximum(V @ coeffs, 1e-12)        # (P,) Taylor surrogate
-
-    # ------------------------------------------------------------------
-    # 4. Rejection step: accept pool[j] with probability
-    #       alpha_pool[j] / max(alpha_pool[j], alpha_hat[j])
-    #    The pointwise max gives a valid upper bound, so acceptance <= 1.
-    # ------------------------------------------------------------------
-    alpha_bound = np.maximum(alpha_pool, alpha_hat)
-    accept_prob = alpha_pool / alpha_bound            # in (0, 1]
-    mask = rng.uniform(size=P) < accept_prob
-
-    if mask.sum() < n_freq:                          # fallback: full pool
-        mask = np.ones(P, dtype=bool)
-
-    survivors  = pool[mask]         # (S, d),  S >= n_freq
-    alpha_surv = alpha_pool[mask]   # (S,)
-
-    # ------------------------------------------------------------------
-    # 5. SIR resample n_freq from survivors proportional to leverage
-    # ------------------------------------------------------------------
-    probs = alpha_surv / alpha_surv.sum()
-    sel   = rng.choice(len(survivors), size=n_freq, replace=True, p=probs)
-    omega   = survivors[sel]         # (n_freq, d)
-    alpha_j = alpha_surv[sel]        # (n_freq,)
-
-    # ------------------------------------------------------------------
-    # 6. IS-reweighted feature matrix
-    #    Z_hat estimated from stratified pool for lower variance.
-    #    weight_j = Z_hat / (n_freq * alpha_j)  -> E[Phi @ Phi.T] = sigma*K
-    # ------------------------------------------------------------------
-    Z_hat = float(alpha_pool.mean())
-    if Z_hat < 1e-15:
-        Z_hat = 1.0
-
-    g_j = np.sqrt(Z_hat / (n_freq * alpha_j))    # (n_freq,)
-    proj = x.astype(np.float64) @ omega.T         # (n, n_freq)
-    sq_sigma = float(np.sqrt(sigma))
-    Phi = np.empty((n, D), dtype=np.float64)
-    Phi[:, 0::2] = sq_sigma * g_j * np.cos(proj)
-    Phi[:, 1::2] = sq_sigma * g_j * np.sin(proj)
-
-    # ------------------------------------------------------------------
-    # 7. Draw prior sample and add observation noise
-    # ------------------------------------------------------------------
-    z = rng.standard_normal(D)
-    y_noise = Phi @ z + rng.normal(scale=float(np.sqrt(noise_var)), size=n)
-    approx_cov = Phi @ Phi.T + noise_var * np.eye(n)
-    return y_noise, approx_cov
 
 
 def sample_mat_rff_from_x1(x: NPInputMat, sigma: float, noise_var: float, l:

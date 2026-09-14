@@ -53,7 +53,6 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gpsampler.maths import k_se, k_mat
 from gpsampler.bayes_validation import (
     gaussian_bayes_error,
     realised_cov_ciq,
@@ -64,13 +63,17 @@ from gpsampler.samplers import (
     _iw_rff_draw_frequencies,
     _stratified_rff_draw_frequencies,
 )
-from gpsampler.leverage_reweighted_rff import (
-    kernel_matrix as _km,
-    recursive_rls as _rrls,
-    nystrom_factor as _nf,
-    ApproxLeverage as _AL,
+from gpsampler.samplers.lrff import (
     compute_sir_pool,
     resample_from_pool,
+)
+from sweeps._shared import (
+    build_K,
+    kernel_kind,
+    neff_hutchinson,
+    neff_exact,
+    lrff_setup,
+    accumulate_khat,
 )
 
 from .config import (
@@ -105,44 +108,8 @@ _DEFAULT_OUTDIR = pathlib.Path(__file__).parent / "output"
 
 
 # ---------------------------------------------------------------------------
-# Kernel helpers
-# ---------------------------------------------------------------------------
-
-def _build_K(x: np.ndarray, nu: float, ell: float, sigma: float = 1.0) -> np.ndarray:
-    """Stationary kernel matrix with k(0) = sigma."""
-    if nu >= 1000.0:  # RBF / squared-exponential
-        return k_se(x, x, sigma, ell)
-    return k_mat(x, x, sigma, ell, nu=nu)
-
-
-def _kernel_kind(nu: float) -> tuple[str, float]:
-    """Return (kind, nu_effective) for leverage_reweighted_rff API."""
-    if nu >= 1000.0:
-        return "rbf", 1.5   # nu unused for rbf
-    return "matern", float(nu)
-
-
-# ---------------------------------------------------------------------------
 # Effective dimension and condition number
 # ---------------------------------------------------------------------------
-
-def _neff_hutchinson(
-    K: np.ndarray,
-    L_xi: np.ndarray,
-    n_probes: int = 30,
-    rng: Optional[np.random.Generator] = None,
-) -> float:
-    """Estimate Tr(K K_ξ^{-1}) via Hutchinson trace estimator.
-
-    Reuses the Cholesky factor L of K_ξ already held by the caller.
-    """
-    rng = rng or np.random.default_rng()
-    n = K.shape[0]
-    total = 0.0
-    for _ in range(n_probes):
-        v = rng.standard_normal(n)
-        total += float(np.dot(K @ v, linalg.cho_solve((L_xi, True), v)))
-    return total / n_probes
 
 
 def _kappa_eta(K: np.ndarray, eta: float, noise_var: float) -> float:
@@ -153,10 +120,6 @@ def _kappa_eta(K: np.ndarray, eta: float, noise_var: float) -> float:
     return float(eigs[-1] / max(eigs[0], 1e-300))
 
 
-def _neff_exact(K: np.ndarray, noise_var: float) -> float:
-    """Exact Tr(K(K+σ²I)^{-1}) via eigendecomposition (O(n³), affordable n≤2048)."""
-    eigs = np.maximum(np.linalg.eigvalsh(K), 0.0)
-    return float(np.sum(eigs / (eigs + noise_var)))
 
 
 class _ExactLeverage:
@@ -246,67 +209,6 @@ def _khat_pciq(K: np.ndarray, eta: float, noise_var: float, J: int,
 
 
 # ---------------------------------------------------------------------------
-# Per-config lrff setup (cached across fidelity values and trials)
-# ---------------------------------------------------------------------------
-
-def _lrff_setup(x: np.ndarray, nu: float, ell: float, noise_var: float):
-    """Build ApproxLeverage callable and related objects for an (x,ν,ℓ) config.
-
-    Returns (K_unit, alpha_fn, r_landmarks).
-    r_landmarks is the number of Nyström landmarks selected by recursive_rls.
-    """
-    kind, nu_eff = _kernel_kind(nu)
-    K_unit = _km(x, kind=kind, ell=ell, nu=nu_eff)
-    S = _rrls(K_unit, lam=noise_var, rng=np.random.default_rng(99))
-    B = _nf(K_unit, S)
-    alpha_fn = _AL(x, B, noise_var)
-    return K_unit, alpha_fn, len(S)
-
-
-# ---------------------------------------------------------------------------
-# Chunked K̂_ξ accumulation from (omega, a) frequency-amplitude pairs
-# ---------------------------------------------------------------------------
-
-def _accumulate_khat(
-    x: np.ndarray,
-    omega: np.ndarray,
-    a: np.ndarray,
-    sigma: float,
-    noise_var: float,
-    chunk_size: int = 512,
-    dtype: type = np.float64,
-) -> np.ndarray:
-    """Build K̂_ξ = σ·∑ a²·[cos cosᵀ + sin sinᵀ] + σ²_ξ·I via chunks.
-
-    Parameters
-    ----------
-    x         : (n, d) input locations
-    omega     : (m, d) frequencies
-    a         : (m,) per-frequency amplitudes (encode sqrt(2·r/D) normalisation)
-    sigma     : kernel output scale σ²
-    noise_var : noise variance σ²_ξ
-    chunk_size: frequencies per chunk (controls peak memory)
-    dtype     : dtype for per-chunk intermediates
-
-    Returns
-    -------
-    Khat_xi : (n, n) realised covariance with E[K̂_ξ] = σ·K + σ²_ξ·I.
-    """
-    n = x.shape[0]
-    m = omega.shape[0]
-    K_acc = np.zeros((n, n), dtype=np.float64)
-    for start in range(0, m, chunk_size):
-        b = min(chunk_size, m - start)
-        w_b = omega[start:start + b]
-        a_b = a[start:start + b]
-        v = (x @ w_b.T).astype(dtype)          # (n, b)
-        cv = (np.cos(v) * a_b).astype(dtype)
-        sv = (np.sin(v) * a_b).astype(dtype)
-        K_acc += cv @ cv.T + sv @ sv.T          # upcasts to float64
-    return sigma * K_acc + noise_var * np.eye(n)
-
-
-# ---------------------------------------------------------------------------
 # Single-config sweep
 # ---------------------------------------------------------------------------
 
@@ -340,21 +242,21 @@ def _sweep_config(
     # ------------------------------------------------------------------
     # True kernel and observation covariance
     # ------------------------------------------------------------------
-    K = _build_K(x, nu, ell, sigma)                         # K (no noise)
+    K = build_K(x, nu, ell, sigma)                         # K (no noise)
     K_xi = K + noise_var * np.eye(n)                        # K_ξ = K + σ²I
     L_xi = linalg.cholesky(K_xi, lower=True)               # L_xi for cho_solve
 
     # ------------------------------------------------------------------
     # Effective dimension and condition number (once per config)
     # ------------------------------------------------------------------
-    n_eff = _neff_hutchinson(K, L_xi, n_probes=30, rng=np.random.default_rng(seed + 1))
+    n_eff = neff_hutchinson(K, L_xi, n_probes=30, rng=np.random.default_rng(seed + 1))
     # Exact n_eff via eigendecomposition — sanity-check for Hutchinson bias.
     # O(n³) but affordable at n≤2048; used as diagnostic column only.
-    n_eff_exact = _neff_exact(K, noise_var)
+    n_eff_exact = neff_exact(K, noise_var)
     kappa = _kappa_eta(K, eta, noise_var)
 
     # kernel kind — constant per (nu, ell), used by rff/lrff/elrff branches
-    kind, nu_eff = _kernel_kind(nu)
+    kind, nu_eff = kernel_kind(nu)
 
     # ------------------------------------------------------------------
     # LRFF / ELRFF setup — build Woodbury alpha_fn once
@@ -363,7 +265,7 @@ def _sweep_config(
     elrff_alpha_fn = None
     r_landmarks = 0
     if method == "lrff":
-        _, lrff_alpha_fn, r_landmarks = _lrff_setup(x, nu, ell, noise_var)
+        _, lrff_alpha_fn, r_landmarks = lrff_setup(x, nu, ell, noise_var)
     elif method == "elrff":
         elrff_alpha_fn = _ExactLeverage(x, L_xi, noise_var)
         r_landmarks = n  # "exact" — no landmark approximation
@@ -411,7 +313,7 @@ def _sweep_config(
                     d, ell, trial_rng, fid // 2,
                     eta=1.0, kernel_type=kind, nu=nu_eff,
                 )
-                Khat_xi = _accumulate_khat(
+                Khat_xi = accumulate_khat(
                     x, omega, a, sigma, noise_var,
                     chunk_size, dtype,
                 )
@@ -424,7 +326,7 @@ def _sweep_config(
                 W, alpha_sel, Z_hat = resample_from_pool(
                     _sp, _sa, _sz, n_freq, trial_rng)
                 g = np.sqrt(Z_hat / (n_freq * alpha_sel))
-                Khat_xi = _accumulate_khat(
+                Khat_xi = accumulate_khat(
                     x, W, g, sigma, noise_var,
                     chunk_size, dtype,
                 )
@@ -437,7 +339,7 @@ def _sweep_config(
                     guard_scale=_iw_guard_scale,
                     kernel_type=kind, nu=nu_eff,
                 )
-                Khat_xi = _accumulate_khat(
+                Khat_xi = accumulate_khat(
                     x, omega, a, sigma, noise_var,
                     chunk_size, dtype,
                 )
@@ -448,7 +350,7 @@ def _sweep_config(
                     x, ell, noise_var, trial_rng, fid // 2,
                     kernel_type=kind, nu=nu_eff,
                 )
-                Khat_xi = _accumulate_khat(
+                Khat_xi = accumulate_khat(
                     x, omega, a, sigma, noise_var,
                     chunk_size, dtype,
                 )

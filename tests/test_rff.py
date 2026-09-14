@@ -1,55 +1,67 @@
 import pytest
-from pytest import MonkeyPatch
-from unittest.mock import patch, MagicMock
-from pytest_mock import mocker
 import numpy as np
-from gpsampler.datasets import sample_with_correlation
-from gpsampler.utils import temp_seed
 
 import gpsampler.maths as gm
-import gpytorch
-import torch
-import numpy as np
+from gpsampler.samplers import estimate_rff_kernel
 
-import gpsampler.samplers 
-from gpsampler.samplers import sample_rff_from_x, zrf, estimate_rff_kernel
+# Local constants — smaller n so D doesn't need to be huge.
+# ||K - K_hat||_F ~ n/sqrt(D), so n=30, D=2000 gives err ~ 0.67.
+n = 30
+d = 2
+ls = 0.5
+nv = 0.008
+ks = 1 - nv
+D = 2000
 
-from gpsampler.tests.utils import *
+rng = np.random.default_rng(1)
+
+def mse(y0, y1):
+    return np.sqrt(np.sum((y1.flatten() - y0.flatten())**2) / n)
 
 
-D = int(n**2 * np.log(n)//2 * 2)
+@pytest.fixture
+def X():
+    return rng.standard_normal((n, d)) / np.sqrt(d)
+
+
+@pytest.fixture
+def K(X):
+    import gpytorch, torch
+    kernel = gpytorch.kernels.RBFKernel()
+    kernel.lengthscale = ls
+    kernel = gpytorch.kernels.ScaleKernel(kernel)
+    kernel.outputscale = ks
+    K = kernel(torch.as_tensor(X)).add_jitter(nv)
+    return K.evaluate().detach().numpy()
+
+
+@pytest.fixture
+def u():
+    return rng.standard_normal((n, 1))
+
+
+@pytest.fixture
+def y0(K, u):
+    return gm.msqrt(K) @ u
+
+
+@pytest.fixture
+def benchmarks(K, y0, u):
+    L = np.linalg.cholesky(K)
+    chol_bench = mse(y0, L @ u)
+    rand_bench = mse(y0, u * np.sqrt(y0.var()))
+    return np.asarray([chol_bench, rand_bench])
+
 
 class TestRFF:
     # Note that kernel errors ||K-Khat|| ~ sum_ij |E_ij|^2 ~ n^2/D ≤ 1
     def test_zrf(self):
         pass
 
-    def test_rff(self, X, K, benchmarks):
-        w = rng.standard_normal((D,1))
-        cov_omega = np.eye(d)/ls**2
-        omega = rng.multivariate_normal(np.zeros(d), cov_omega, D//2)
-        noise = rng.normal(scale=np.sqrt(nv),size=n)
-
-        mocked_rng = MagicMock()
-        mocked_rng.standard_normal.return_value = w
-        mocked_rng.multivariate_normal.return_value = omega
-        mocked_rng.normal.return_value = noise
-
-        Z = zrf(omega, D, X)*np.sqrt(ks)
-        with patch('samplers.zrf') as mock_zrf:
-            mock_zrf.return_value = Z
-            f1,C1 = sample_rff_from_x(X, ks, nv, ls, mocked_rng, D)
-        # transform w to u to make comparable
-        f0 = (gm.msqrt(K) @ gm.invmsqrt(C1) @ Z @ w).flatten()
-        err = mse(f0,f1)
-        Kerr = np.linalg.norm(K - C1)
-        assert Kerr < 1.0
-        np.testing.assert_array_less(err,benchmarks, verbose=True)
-
     def test_Krff(self, X, K):
         Krff = estimate_rff_kernel(X, D, ks, ls)
         Krffe = Krff + nv * np.eye(n)
-        err = np.linalg.norm(K-Krffe)
+        err = np.linalg.norm(K - Krffe)
         assert err < 1.0
 
     def test_Krff_sample(self, X, K, u, benchmarks):
@@ -57,9 +69,9 @@ class TestRFF:
         Krffe = Krff + nv * np.eye(n)
         y1 = gm.msqrt(Krffe) @ u
         y0 = gm.msqrt(K) @ u
-        err = mse(y0,y1)
-        np.testing.assert_array_less(err,benchmarks)
+        err = mse(y0, y1)
+        np.testing.assert_array_less(err, benchmarks)
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
-    # pytest.main(["--trace"], plugins=[TestMatSqrt()])

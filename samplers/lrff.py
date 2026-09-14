@@ -1,75 +1,15 @@
-"""
-Leverage-reweighted random Fourier feature (RFF) sampler for Gaussian processes.
+"""Leverage-reweighted RFF (LRFF) sampler.
 
-Generates an approximate draw  f ~ N(0, K)  at strictly sub-Cholesky cost, with
-the random-feature frequencies importance-sampled in proportion to their
-(approximate) ridge-leverage  alpha(omega) = u* K_xi^{-1} u,  u_j = exp(i w.x_j).
-The leverage scores are obtained from a recursive ridge-leverage-score Nystrom
-sketch, so the n x n inverse K_xi^{-1} is never formed.
-
-This implements the estimator analysed in the accompanying paper
-(Propositions "Leverage-reweighted RFF" and "Approximate-leverage reweighting"):
-
-    Khat = (2/D) sum_j  (Zt / alpha_t(w_j)) M(w_j),   w_j ~ qt  proportional to  alpha_t * p,
-
-with  M(w) = c c^T + s s^T,  c_i = cos(w.x_i),  s_i = sin(w.x_i),  Zt = E_p[alpha_t].
-A sample is produced from the feature map  f = Phi z,  z ~ N(0, I_D), so that
-Cov(f) = Phi Phi^T = Khat ~ K.
-
-Pipeline
---------
-  1. recursive_rls      -> landmark set S            (never forms K_xi^{-1})
-  2. nystrom_factor     -> B  with  Khat = B B^T     and Woodbury handle for Khat_xi^{-1}
-  3. approx_leverage    -> alpha_t(w) = u* Khat_xi^{-1} u   (Woodbury, O(n r) per freq)
-  4. sample_frequencies -> w_j ~ qt  proportional to  alpha_t * p   (sampling-importance-resampling)
-  5. draw_sample        -> Phi z,  z ~ N(0, I_D)
-
-Dependencies: numpy, scipy.  Kernels supported: 'rbf' and 'matern' (nu in {0.5,1.5,2.5,...}).
-
-Author note: exact ridge-leverage landmark selection would cost O(n^3); the
-recursive scheme of Musco & Musco (2017) used here keeps the largest dense solve
-at O~(n_eff) and the total cost at O~(n * n_eff^2).
+Absorbed from leverage_reweighted_rff.py plus sample_lrff_from_x from
+the original samplers.py monolith.
 """
 
 from __future__ import annotations
 import numpy as np
 from scipy.linalg import cho_factor, cho_solve, eigh
-from scipy.spatial.distance import cdist
-from scipy.special import gamma, kv
+from typing import Tuple
 
-
-# ---------------------------------------------------------------------------
-# Kernels and their spectral (Bochner) densities
-# ---------------------------------------------------------------------------
-def kernel_matrix(X, kind="rbf", ell=0.1, nu=1.5):
-    """Stationary kernel Gram matrix K with k(0)=1.  X is (n, d)."""
-    D = cdist(X, X)
-    if kind == "rbf":
-        return np.exp(-(D ** 2) / (2 * ell ** 2))
-    if kind == "matern":
-        Dz = np.where(D == 0.0, 1e-12, D)
-        f = np.sqrt(2 * nu) * Dz / ell
-        K = (2 ** (1 - nu) / gamma(nu)) * (f ** nu) * kv(nu, f)
-        np.fill_diagonal(K, 1.0)
-        return K
-    raise ValueError(f"unknown kernel {kind!r}")
-
-
-def spectral_sampler(n_freq, d, kind="rbf", ell=0.1, nu=1.5, rng=None):
-    """Draw n_freq frequencies from the kernel's spectral density p(omega).
-
-    RBF:    omega ~ N(0, ell^{-2} I_d).
-    Matern: omega ~ multivariate-t with 2*nu dof and scale ell^{-1}
-            (verified to satisfy E_p[cos(w.tau)] = k(tau)).
-    """
-    rng = np.random.default_rng() if rng is None else rng
-    g = rng.standard_normal((n_freq, d))
-    if kind == "rbf":
-        return g / ell
-    if kind == "matern":
-        u = rng.chisquare(2 * nu, size=(n_freq, 1))
-        return (g / ell) * np.sqrt(2 * nu / u)
-    raise ValueError(f"unknown kernel {kind!r}")
+from ._utils import kernel_matrix, spectral_sampler, NPInputMat, NPSample, NPKernel
 
 
 # ---------------------------------------------------------------------------
@@ -299,42 +239,46 @@ def draw_sample(Phi, n_samples=1, sigma_obs=0.0, rng=None):
 
 
 # ---------------------------------------------------------------------------
-# Self-check / demo
+# Public sampler API (moved from samplers.py)
 # ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    rng = np.random.default_rng(0)
-    n, d = 1024, 1
-    X = np.linspace(0, 1, n).reshape(n, 1)
-    kind, ell, nu, sigma2 = "matern", 0.1, 1.5, 1e-2
 
-    Phi, diag = reweighted_rff_sampler(
-        X, kind=kind, ell=ell, nu=nu, sigma2=sigma2,
-        n_freq=4000, rng=rng, return_diagnostics=True)
+def sample_lrff_from_x(
+        x: NPInputMat, sigma: float, noise_var: float, l: float,
+        rng: np.random.Generator, D: int, kernel_type: str = "rbf",
+        **kwargs) -> Tuple[NPSample, NPKernel]:
+    """Leverage-reweighted RFF sample at points x.  Same external interface as
+    sample_rff_from_x so the same sweep harness (sweep.py) drives both methods.
 
-    K = diag["K"]
-    Khat = Phi @ Phi.T
+    D is the total number of RFF features (D = 2 * n_freq, must be even).
+    The outputscale sigma and noise variance noise_var match sample_se_rff_from_x:
+      - Phi from reweighted_rff_sampler has k(0)=1 (no sigma); scaled by sqrt(sigma)
+        so that Cov(y_noisefree) ≈ sigma * K_RBF.
+      - Additive noise ε ~ N(0, noise_var · I) is drawn with the same rng.
 
-    # spectrally weighted error Tr(Delta^2), the quantity the TV bound controls
-    Kxi = K + sigma2 * np.eye(n)
-    wv, Uk = np.linalg.eigh(Kxi)
-    Kxi_isq = (Uk / np.sqrt(wv)) @ Uk.T
-    Delta = Kxi_isq @ (Khat - K) @ Kxi_isq
-    rel_fro = np.linalg.norm(Khat - K) / np.linalg.norm(K)
-
-    print(f"kernel={kind} nu={nu} ell={ell} sigma2={sigma2}  n={n}")
-    print(f"  n_eff (proxy)            = {diag['neff_proxy']:.1f}")
-    print(f"  recursive-RLS landmarks  = {diag['n_landmarks']}  "
-          f"(= {diag['n_landmarks'] / diag['neff_proxy']:.2f} x n_eff)")
-    print(f"  Z_hat = E_p[alpha_t]     = {diag['Z_hat']:.1f}  (should ~ n_eff)")
-    print(f"  leverage range (sampled) = [{diag['alpha_min']:.1f}, {diag['alpha_max']:.1f}]")
-    print(f"  relative Frobenius error ||Khat-K||/||K|| = {rel_fro:.3f}")
-    print(f"  Tr(Delta^2)              = {np.trace(Delta @ Delta):.3f}")
-
-    # a prior sample, and a check that the empirical covariance reproduces Khat
-    f = draw_sample(Phi, rng=rng)
-    y = draw_sample(Phi, sigma_obs=np.sqrt(sigma2), rng=rng)
-    fs = draw_sample(Phi, n_samples=500, rng=rng)
-    emp_var = fs.var(axis=1).mean()
-    print(f"  drew prior sample f, shape {f.shape}")
-    print(f"  empirical per-point var over 500 draws = {emp_var:.3f}  "
-          f"(matches mean diag(Khat) = {np.mean(np.diag(Khat)):.3f}, target k(0)=1)")
+    Note: reweighted_rff_sampler forms the full n×n kernel matrix K for the
+    Nyström sketch — O(n²) cost identical to the whitening step already done by
+    the harness.  No additional O(n³) work is introduced beyond what the harness
+    already performs.
+    """
+    n = x.shape[0]
+    kind = "rbf" if kernel_type in ("rbf", "se") else kernel_type
+    nu = kwargs.get("nu", 1.5)
+    n_freq = D // 2
+    # Build the (n, D) feature matrix.  leverage_reweighted_rff normalises so
+    # that Phi @ Phi^T ≈ K with k(0)=1; sigma is applied below.
+    Phi = reweighted_rff_sampler(
+        X=x, kind=kind, ell=l, nu=nu, sigma2=noise_var,
+        n_freq=n_freq, rng=rng,
+        alpha_fn=kwargs.get("alpha_fn"),
+        pool_factor=kwargs.get("pool_factor", 5),
+        pool_cache=kwargs.get("pool_cache"))
+    # Apply output scale so Cov(y) ≈ sigma * K.
+    # Keep Phi in float32 to avoid upcasting to float64 (halves peak memory).
+    Phi = Phi * np.float32(np.sqrt(sigma))
+    # Draw prior sample: z ~ N(0, I_D), y = Phi z
+    # z is float32 to avoid upcasting Phi; y will be float64 after noise addition.
+    z = rng.standard_normal(Phi.shape[1]).astype(np.float32)
+    y = (Phi @ z).astype(np.float64)
+    # Add observation noise, identical convention to sample_se_rff_from_x
+    y_noise = y + rng.normal(scale=np.sqrt(noise_var), size=(n,))
+    return y_noise, np.nan

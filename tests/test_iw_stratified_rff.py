@@ -10,7 +10,7 @@ Mirrors the verify/ scripts:
 
 import numpy as np
 import pytest
-from gpsampler.leverage_reweighted_rff import kernel_matrix
+from gpsampler.samplers._utils import kernel_matrix
 from gpsampler.samplers import (
     sample_iw_rff_from_x,
     sample_stratified_rff_from_x,
@@ -40,7 +40,7 @@ d = 1
 ls = 1.0
 nv = 0.01
 ks = 1.0
-D = 4000    # RFF features for covariance tests
+D = 400  # RFF features for covariance tests
 rng_seed = 0
 
 
@@ -58,6 +58,7 @@ def K_rbf(X):
 # _log_spectral_density
 # ---------------------------------------------------------------------------
 
+
 class TestLogSpectralDensity:
     """Verify normalisation of _log_spectral_density via Monte-Carlo."""
 
@@ -68,6 +69,7 @@ class TestLogSpectralDensity:
         omega = rng.standard_normal((5000, d_loc)) / ell
         log_p = _log_spectral_density(omega, "rbf", ell, nu=1.5, d=d_loc)
         from scipy.stats import multivariate_normal
+
         log_p_ref = multivariate_normal.logpdf(
             omega, mean=np.zeros(d_loc), cov=np.eye(d_loc) / ell**2
         )
@@ -90,6 +92,7 @@ class TestLogSpectralDensity:
 # IW-RFF sampler (mirrors verify_iw_covariance.py)
 # ---------------------------------------------------------------------------
 
+
 class TestIWRFF:
     """Tests for the safeguarded importance-weighted RFF sampler."""
 
@@ -97,7 +100,9 @@ class TestIWRFF:
         rng = np.random.default_rng(10)
         y, cov = sample_iw_rff_from_x(X, ks, nv, ls, rng, D)
         assert y.shape == (n,)
-        assert np.isnan(cov), "sample_iw_rff_from_x should return np.nan for cov"
+        assert np.isnan(
+            cov
+        ), "sample_iw_rff_from_x should return np.nan for cov"
         assert np.all(np.isfinite(y))
 
     def test_eta_1_is_plain_rff(self, X, K_rbf):
@@ -121,7 +126,7 @@ class TestIWRFF:
 
     def test_is_weights_bounded(self, X):
         """p/q_eta <= 1/eta always."""
-        from gpsampler.leverage_reweighted_rff import spectral_sampler
+        from gpsampler.samplers._utils import spectral_sampler
 
         for eta in [0.1, 0.3, 0.5]:
             rng = np.random.default_rng(12)
@@ -130,13 +135,11 @@ class TestIWRFF:
             omega = spectral_sampler(2000, d, kind, ls, 1.5, rng)
             log_p = _log_spectral_density(omega, kind, ls, 1.5, d)
             log_g = _log_spectral_density(omega, kind, l_guard, 1.5, d)
-            log_q = np.logaddexp(
-                np.log(1.0 - eta) + log_g, np.log(eta) + log_p
-            )
+            log_q = np.logaddexp(np.log(1.0 - eta) + log_g, np.log(eta) + log_p)
             r = np.exp(log_p - log_q)
-            assert np.all(r <= 1.0 / eta + 1e-9), (
-                f"eta={eta}: max ratio {r.max():.3f} > 1/eta={1/eta:.3f}"
-            )
+            assert np.all(
+                r <= 1.0 / eta + 1e-9
+            ), f"eta={eta}: max ratio {r.max():.3f} > 1/eta={1/eta:.3f}"
 
     # -- Covariance unbiasedness (mirrors verify_iw_covariance.py) ------------
 
@@ -151,23 +154,34 @@ class TestIWRFF:
         rng = np.random.default_rng(1)
         Kbar = np.zeros((n, n))
         for _ in range(reps):
+
             def g_sampler(n_samp, _d, _rng):
                 return _rng.normal(0.0, s_g, size=(n_samp, _d))
 
             def g_logpdf(omega):
                 var_g = s_g**2
-                return (-0.5 * np.sum(omega**2, axis=1) / var_g
-                        - 0.5 * omega.shape[1] * np.log(2 * np.pi * var_g))
+                return -0.5 * np.sum(
+                    omega**2, axis=1
+                ) / var_g - 0.5 * omega.shape[1] * np.log(2 * np.pi * var_g)
 
             Z = _build_iw_rff_features(
-                X, ls, rng, D, eta=eta,
-                g_sampler=g_sampler, g_logpdf=g_logpdf,
+                X,
+                ls,
+                rng,
+                D,
+                eta=eta,
+                g_sampler=g_sampler,
+                g_logpdf=g_logpdf,
             )
             Kbar += Z @ Z.T
         Kbar /= reps
 
-        rel_err = np.linalg.norm(Kbar - K_rbf, "fro") / np.linalg.norm(K_rbf, "fro")
-        assert rel_err < 0.05, f"correct weight relerr={rel_err:.3f} (expect < 0.05)"
+        rel_err = np.linalg.norm(Kbar - K_rbf, "fro") / np.linalg.norm(
+            K_rbf, "fro"
+        )
+        assert (
+            rel_err < 0.05
+        ), f"correct weight relerr={rel_err:.3f} (expect < 0.05)"
 
     def test_buggy_weight_biased(self, X, K_rbf):
         """Using p/g instead of p/q_eta should produce biased covariance."""
@@ -192,8 +206,9 @@ class TestIWRFF:
             )
             log_p = _log_spectral_density(W, "rbf", ls, 1.5, d_loc)
             var_g = s_g**2
-            log_g = (-0.5 * np.sum(W**2, axis=1) / var_g
-                     - 0.5 * d_loc * np.log(2 * np.pi * var_g))
+            log_g = -0.5 * np.sum(
+                W**2, axis=1
+            ) / var_g - 0.5 * d_loc * np.log(2 * np.pi * var_g)
             # BUG: use g instead of q_eta
             a2 = 2.0 * np.exp(log_p - log_g) / D
             a = np.sqrt(a2)
@@ -202,12 +217,13 @@ class TestIWRFF:
             Kbar_buggy += Z @ Z.T
         Kbar_buggy /= reps
 
-        rel_err_buggy = (np.linalg.norm(Kbar_buggy - K_rbf, "fro")
-                         / np.linalg.norm(K_rbf, "fro"))
+        rel_err_buggy = np.linalg.norm(
+            Kbar_buggy - K_rbf, "fro"
+        ) / np.linalg.norm(K_rbf, "fro")
         # Buggy should be much worse
-        assert rel_err_buggy > 0.1, (
-            f"buggy weight relerr={rel_err_buggy:.3f} (expect >> correct)"
-        )
+        assert (
+            rel_err_buggy > 0.1
+        ), f"buggy weight relerr={rel_err_buggy:.3f} (expect >> correct)"
 
     # -- Matern ---------------------------------------------------------------
 
@@ -230,12 +246,14 @@ class TestIWRFF:
 # Multi-index and Taylor helpers (mirrors verify_a4_gaps.py)
 # ---------------------------------------------------------------------------
 
+
 class TestTaylorHelpers:
     """Tests for multi-index enumeration, monomial design, Taylor coefficients."""
 
     def test_multi_index_count(self):
         """r = binom(R+d, d)."""
         from math import comb
+
         for d_loc, R in [(1, 6), (2, 4), (3, 3)]:
             alphas = _enumerate_multi_indices(d_loc, R)
             assert len(alphas) == comb(R + d_loc, d_loc)
@@ -243,6 +261,7 @@ class TestTaylorHelpers:
     def test_monomial_identity(self):
         """T_R(w^T x) = sum_{|a|<=R} i^{|a|}/a! * w^a * x^a."""
         from math import factorial
+
         rng = np.random.default_rng(0)
         for d_loc, R in [(1, 6), (2, 4), (3, 3)]:
             alphas = _enumerate_multi_indices(d_loc, R)
@@ -259,14 +278,15 @@ class TestTaylorHelpers:
                     xa = np.prod([x[j] ** a[j] for j in range(d_loc)])
                     wa = np.prod([w[j] ** a[j] for j in range(d_loc)])
                     acc += (1j ** sum(a)) / afact * wa * xa
-                assert abs(TR - acc) < 1e-9 * (1 + abs(TR)), (
-                    f"d={d_loc}, R={R}: |TR - monomial| = {abs(TR-acc):.2e}"
-                )
+                assert abs(TR - acc) < 1e-9 * (
+                    1 + abs(TR)
+                ), f"d={d_loc}, R={R}: |TR - monomial| = {abs(TR-acc):.2e}"
 
     def test_taylor_coeffs_batch(self):
         """_taylor_coeffs_batch matches manual computation."""
         rng = np.random.default_rng(1)
         from math import factorial
+
         d_loc, R = 2, 3
         alphas = _enumerate_multi_indices(d_loc, R)
         omega = rng.standard_normal((10, d_loc))
@@ -276,14 +296,17 @@ class TestTaylorHelpers:
         for i in range(10):
             for j, a in enumerate(alphas):
                 afact = np.prod([factorial(ai) for ai in a])
-                expected = (1j ** sum(a)) / afact * np.prod(
-                    [omega[i, k] ** a[k] for k in range(d_loc)]
+                expected = (
+                    (1j ** sum(a))
+                    / afact
+                    * np.prod([omega[i, k] ** a[k] for k in range(d_loc)])
                 )
                 assert abs(C[i, j] - expected) < 1e-12
 
     def test_rank_bound(self):
         """rank(K_R) <= r = binom(R+d, d) (mirrors verify_a4_gaps.py claim 2)."""
         from math import comb
+
         rng = np.random.default_rng(0)
         for d_loc, R, n_loc in [(1, 5, 40), (2, 3, 60)]:
             r = comb(R + d_loc, d_loc)
@@ -318,14 +341,15 @@ class TestTaylorHelpers:
                     term = term * (1j * zs) / k
                     acc = acc + term
                 actual_err = np.max(np.abs(np.exp(1j * zs) - acc))
-                assert actual_err <= eps + 1e-10, (
-                    f"Z={Z_max}, eps={eps}: R={R}, actual_err={actual_err:.4f}"
-                )
+                assert (
+                    actual_err <= eps + 1e-10
+                ), f"Z={Z_max}, eps={eps}: R={R}, actual_err={actual_err:.4f}"
 
 
 # ---------------------------------------------------------------------------
 # H matrix and Woodbury (mirrors verify_a4_gaps.py claim 3)
 # ---------------------------------------------------------------------------
+
 
 class TestWoodbury:
     """Tests for _build_H_matrix, _build_B_via_woodbury, _leverage_batch."""
@@ -375,7 +399,7 @@ class TestWoodbury:
             E = rng.uniform(-zeta, zeta, (n_loc, n_loc))
             E = (E + E.T) / 2
             wv, Vv = np.linalg.eigh(A)
-            Aisq = Vv @ np.diag(wv ** -0.5) @ Vv.T
+            Aisq = Vv @ np.diag(wv**-0.5) @ Vv.T
             lhs = np.linalg.norm(Aisq @ E @ Aisq, "fro")
             rhs = n_loc * zeta / s2
             assert lhs <= rhs + 1e-10, f"LHS={lhs:.4f} > RHS={rhs:.4f}"
@@ -384,6 +408,7 @@ class TestWoodbury:
 # ---------------------------------------------------------------------------
 # Rejection sampler (mirrors verify_rejection_sampler.py)
 # ---------------------------------------------------------------------------
+
 
 class TestRejectionSampler:
     """Test rejection sampling from box-truncated Gaussian weighted by leverage."""
@@ -445,7 +470,11 @@ class TestRejectionSampler:
             H = _build_H_matrix(alphas, raw_mom, d_loc)
             B_mat = _build_B_via_woodbury(Phi, H, s2)
 
-            zs = np.linspace(-Z_max, Z_max, 400) if Z_max > 0 else np.array([0.0])
+            zs = (
+                np.linspace(-Z_max, Z_max, 400)
+                if Z_max > 0
+                else np.array([0.0])
+            )
             term = np.ones_like(zs, dtype=complex)
             acc_t = term.copy()
             for k in range(1, R + 1):
@@ -469,6 +498,7 @@ class TestRejectionSampler:
 # Stratified RFF sampler (end-to-end)
 # ---------------------------------------------------------------------------
 
+
 class TestStratifiedRFF:
     """Tests for the stratified truncated-Taylor RFF sampler."""
 
@@ -489,7 +519,14 @@ class TestStratifiedRFF:
         """Matérn kernel should produce finite samples."""
         rng = np.random.default_rng(22)
         y, cov = sample_stratified_rff_from_x(
-            X, ks, nv, ls, rng, D=200, kernel_type="matern", nu=1.5,
+            X,
+            ks,
+            nv,
+            ls,
+            rng,
+            D=200,
+            kernel_type="matern",
+            nu=1.5,
         )
         assert y.shape == (n,)
         assert np.isnan(cov)
@@ -511,14 +548,19 @@ class TestStratifiedRFF:
             Kbar += Z @ Z.T
         Kbar /= reps
 
-        rel_err = np.linalg.norm(Kbar - K_rbf, "fro") / np.linalg.norm(K_rbf, "fro")
+        rel_err = np.linalg.norm(Kbar - K_rbf, "fro") / np.linalg.norm(
+            K_rbf, "fro"
+        )
         # Allow bias from box truncation + finite reps + rejection sampling variance
-        assert rel_err < 0.30, f"stratified relerr={rel_err:.3f} (expect < 0.30)"
+        assert (
+            rel_err < 0.30
+        ), f"stratified relerr={rel_err:.3f} (expect < 0.30)"
 
 
 # ---------------------------------------------------------------------------
 # Stratified pi_box test (mirrors verify_stratified_pibox.py)
 # ---------------------------------------------------------------------------
+
 
 class TestStratifiedPiBox:
     """Covariance unbiasedness at truncated boxes (pi_box < 1).
@@ -529,15 +571,24 @@ class TestStratifiedPiBox:
     at wide boxes (pi_box ~ 1).
     """
 
-    def _run_pibox_config(self, target_pi, n_loc=50, ell=1.0, s2=1e-2,
-                          eta_val=0.5, D_loc=4000, reps=40, seed=0):
+    def _run_pibox_config(
+        self,
+        target_pi,
+        n_loc=50,
+        ell=1.0,
+        s2=1e-2,
+        eta_val=0.5,
+        D_loc=4000,
+        reps=40,
+        seed=0,
+    ):
         """Run one pi_box configuration, return (pi_box, correct_relerr)."""
         from scipy.stats import norm as _norm
 
         rng = np.random.default_rng(seed)
         X_loc = rng.standard_normal((n_loc, 1))
         diff = X_loc - X_loc.T
-        K = np.exp(-diff ** 2 / (2 * ell ** 2))
+        K = np.exp(-(diff**2) / (2 * ell**2))
 
         s = 1.0 / ell
         B = float(_norm.ppf(0.5 + target_pi / 2.0, scale=s))
@@ -548,8 +599,14 @@ class TestStratifiedPiBox:
         Kbar = np.zeros((n_loc, n_loc))
         for _ in range(reps):
             Z = _build_stratified_rff_features(
-                X_loc, ell, s2, rng, D_loc,
-                eps=0.4, box_scale=box_scale, eta=eta_val,
+                X_loc,
+                ell,
+                s2,
+                rng,
+                D_loc,
+                eps=0.4,
+                box_scale=box_scale,
+                eta=eta_val,
             )
             Kbar += Z @ Z.T
         Kbar /= reps
@@ -560,21 +617,22 @@ class TestStratifiedPiBox:
     def test_unbiased_at_narrow_box(self):
         """Correct weight should be unbiased even with pi_box ~ 0.85."""
         pi_box, rel_err = self._run_pibox_config(0.85)
-        assert rel_err < 0.10, (
-            f"stratified biased at pi_box={pi_box:.2f}: relerr={rel_err:.3f}"
-        )
+        assert (
+            rel_err < 0.10
+        ), f"stratified biased at pi_box={pi_box:.2f}: relerr={rel_err:.3f}"
 
     def test_unbiased_at_very_narrow_box(self):
         """Correct weight should be unbiased even with pi_box ~ 0.75."""
         pi_box, rel_err = self._run_pibox_config(0.75)
-        assert rel_err < 0.10, (
-            f"stratified biased at pi_box={pi_box:.2f}: relerr={rel_err:.3f}"
-        )
+        assert (
+            rel_err < 0.10
+        ), f"stratified biased at pi_box={pi_box:.2f}: relerr={rel_err:.3f}"
 
 
 # ---------------------------------------------------------------------------
 # Setup and ratio bounds (mirrors verify_setup_and_ratios.py)
 # ---------------------------------------------------------------------------
+
 
 class TestSetupAndRatios:
     """Verify n_eff bound and IS ratio bound from the paper."""
@@ -586,13 +644,11 @@ class TestSetupAndRatios:
             n_loc = 80
             s2 = rng.uniform(0.05, 3.0)
             X_loc = rng.normal(0, 1, n_loc)
-            K = np.exp(-(X_loc[:, None] - X_loc[None, :]) ** 2 / (2 * 0.7 ** 2))
+            K = np.exp(-((X_loc[:, None] - X_loc[None, :]) ** 2) / (2 * 0.7**2))
             A = K + s2 * np.eye(n_loc)
             neff = np.trace(K @ np.linalg.inv(A))
             lb = n_loc / (n_loc + s2)
-            assert neff >= lb - 1e-9, (
-                f"n_eff={neff:.3f} < n/(n+s2)={lb:.3f}"
-            )
+            assert neff >= lb - 1e-9, f"n_eff={neff:.3f} < n/(n+s2)={lb:.3f}"
 
     def test_is_ratio_bounded(self):
         """p/q = 1/(eta + (1-eta)*a/d) in [0, 1/eta]."""
@@ -602,14 +658,15 @@ class TestSetupAndRatios:
             a = rng.uniform(0, 10)
             d_l = rng.uniform(0.5, 5)
             ratio = 1.0 / (eta + (1 - eta) * a / d_l)
-            assert 0 <= ratio <= 1.0 / eta + 1e-9, (
-                f"eta={eta:.3f} a={a:.2f} d={d_l:.2f}: ratio={ratio:.3f}"
-            )
+            assert (
+                0 <= ratio <= 1.0 / eta + 1e-9
+            ), f"eta={eta:.3f} a={a:.2f} d={d_l:.2f}: ratio={ratio:.3f}"
 
 
 # ---------------------------------------------------------------------------
 # Oracle constant chain (mirrors verify_constant.py)
 # ---------------------------------------------------------------------------
+
 
 class TestOracleConstant:
     """Verify the constant substitution chain end-to-end."""
@@ -623,30 +680,31 @@ class TestOracleConstant:
             d_vals = rng.uniform(0.4, 2.5, L)
             rho = rng.uniform(0.05, 0.4)
             CT = rng.uniform(0.2, 3.0)
-            T = CT * d_vals ** 2
+            T = CT * d_vals**2
             eta_opt = np.sqrt(T) / (d_vals + np.sqrt(T))
-            beta_raw = 8 * (1 + rho) ** 2 * (
-                d_vals ** 2 / (1 - eta_opt) + T / eta_opt
+            beta_raw = (
+                8 * (1 + rho) ** 2 * (d_vals**2 / (1 - eta_opt) + T / eta_opt)
             )
-            beta_bound = 8 * (1 + rho) ** 2 * (1 + np.sqrt(CT)) ** 2 * d_vals ** 2
+            beta_bound = 8 * (1 + rho) ** 2 * (1 + np.sqrt(CT)) ** 2 * d_vals**2
             assert np.all(beta_raw <= beta_bound + 1e-9), "beta bound violated"
 
             neffR = np.sum(w * d_vals)
             Dl_frac = w * d_vals / neffR
             D_tot = 5000.0
             Dl = D_tot * Dl_frac
-            EDelta = np.sum(2 * w ** 2 * beta_raw / Dl)
+            EDelta = np.sum(2 * w**2 * beta_raw / Dl)
             pre_neff_bound = (
-                16 * (1 + rho) ** 2 * (1 + np.sqrt(CT)) ** 2 * neffR ** 2 / D_tot
+                16 * (1 + rho) ** 2 * (1 + np.sqrt(CT)) ** 2 * neffR**2 / D_tot
             )
-            assert EDelta <= pre_neff_bound + 1e-9, (
-                f"E||Delta||^2={EDelta:.5f} > bound={pre_neff_bound:.5f}"
-            )
+            assert (
+                EDelta <= pre_neff_bound + 1e-9
+            ), f"E||Delta||^2={EDelta:.5f} > bound={pre_neff_bound:.5f}"
 
 
 # ---------------------------------------------------------------------------
 # Matérn extension: moments, box probability, H matrix, covariance
 # ---------------------------------------------------------------------------
+
 
 class TestTruncatedNormalMoments:
     """Verify _truncated_normal_moments recurrence against quad-based reference."""
@@ -669,6 +727,7 @@ class TestMaternBoxProb:
 
     def test_d1_matches_t_cdf(self):
         from scipy.stats import t as _t
+
         for nu in [0.5, 1.5, 2.5]:
             l, B = 1.0, 3.0
             expected = float(2.0 * _t.cdf(B * l, df=2 * nu) - 1.0)
@@ -690,6 +749,7 @@ class TestMaternBoxProb:
     def test_approaches_se_for_large_nu(self):
         """As ν → ∞, Matérn → SE, so pi_box should converge."""
         from scipy.stats import norm as _norm
+
         l, B = 1.0, 3.0
         se_pi = float((2.0 * _norm.cdf(B * l) - 1.0))
         mat_pi = _matern_box_prob(l, B, nu=50.0, d=1)
@@ -710,6 +770,7 @@ class TestBuildHMatrixMatern:
         """For d=1, H_matern should match quad-based 1D t-distribution moments."""
         from scipy.integrate import quad
         from scipy.stats import t as _t
+
         d_loc, R = 1, 3
         nu, l, B = 1.5, 1.0, 3.0
         alphas = _enumerate_multi_indices(d_loc, R)
@@ -724,6 +785,7 @@ class TestBuildHMatrixMatern:
 
         # Build H with reference moments
         from math import factorial as _fact
+
         r = len(alphas)
         H_ref = np.zeros((r, r))
         for i, a in enumerate(alphas):
@@ -733,7 +795,7 @@ class TestBuildHMatrixMatern:
                 afact = _fact(a[0])
                 bfact = _fact(b[0])
                 H_ref[i, j] = np.real(
-                    (1j ** total) * ref_mom[deg] / (afact * bfact)
+                    (1j**total) * ref_mom[deg] / (afact * bfact)
                 )
 
         H_mat = _build_H_matrix_matern(alphas, l, B, nu, d_loc)
@@ -767,13 +829,20 @@ class TestStratifiedRFFMatern:
         Kbar = np.zeros((n, n))
         for _ in range(reps):
             Z = _build_stratified_rff_features(
-                X, ls, nv, rng, D_cov,
-                kernel_type="matern", nu=nu,
+                X,
+                ls,
+                nv,
+                rng,
+                D_cov,
+                kernel_type="matern",
+                nu=nu,
             )
             Kbar += Z @ Z.T
         Kbar /= reps
 
-        rel_err = np.linalg.norm(Kbar - K_mat, "fro") / np.linalg.norm(K_mat, "fro")
+        rel_err = np.linalg.norm(Kbar - K_mat, "fro") / np.linalg.norm(
+            K_mat, "fro"
+        )
         assert rel_err < 0.30, f"Matérn 1.5 stratified relerr={rel_err:.3f}"
 
     @pytest.mark.parametrize("nu", [0.5, 2.5])
@@ -781,7 +850,14 @@ class TestStratifiedRFFMatern:
         """Stratified RFF should produce finite samples for ν=0.5, 2.5."""
         rng = np.random.default_rng(43)
         y, _ = sample_stratified_rff_from_x(
-            X, ks, nv, ls, rng, D=200, kernel_type="matern", nu=nu,
+            X,
+            ks,
+            nv,
+            ls,
+            rng,
+            D=200,
+            kernel_type="matern",
+            nu=nu,
         )
         assert y.shape == (n,)
         assert np.all(np.isfinite(y))
@@ -790,6 +866,7 @@ class TestStratifiedRFFMatern:
 # ---------------------------------------------------------------------------
 # Cross-sampler comparison
 # ---------------------------------------------------------------------------
+
 
 class TestCrossComparison:
     """Both samplers should produce finite samples."""

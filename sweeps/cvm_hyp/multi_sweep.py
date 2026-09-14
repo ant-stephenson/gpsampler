@@ -1,5 +1,6 @@
 import argparse
-import sweep
+from sweeps.cvm_hyp.run_sweep import run_sweep
+from sweeps.cvm_hyp.config import param_sets, default_param_set
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -21,11 +22,11 @@ if __name__ == "__main__":
 
     param_set = {
         k: v
-        for(k, v) in zip(
-            sweep.default_param_set.keys(),
-            sweep.param_sets[args.param_idx])}
+        for (k, v) in zip(
+            default_param_set.keys(),
+            param_sets[args.param_idx].values())}
 
-    sweep.run_sweep(
+    run_sweep(
         **param_set,
         job_id=args.job_id,
         verbose=args.verbose,

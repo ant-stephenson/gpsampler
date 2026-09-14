@@ -23,7 +23,7 @@ module load languages/python/3.8.20
 
 source $SCRIPT_DIR/.ve38/bin/activate
 
-python $SCRIPT_DIR/multi_sweep.py --job_id $SLURM_ARRAY_JOB_ID \
+python $SCRIPT_DIR/sweeps/cvm_hyp/multi_sweep.py --job_id $SLURM_ARRAY_JOB_ID \
     --param_idx=$SLURM_ARRAY_TASK_ID --verbose="True" --NO_TRIALS=1000 \
     --significance_threshold=0.1 --ncpus=$SLURM_CPUS_PER_TASK \
     --method=rff --pre="True" --bv

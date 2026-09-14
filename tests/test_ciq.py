@@ -64,6 +64,7 @@ def test_mem_usage():
     # con = sqlite3.connect(".pymon")
     # cur = con.cursor()
     # res = cur.execute("select ITEM, MEM_USAGE from TEST_METRICS ORDER BY MEM_USAGE DESC LIMIT 10;")
+    pass
 
 if __name__ == "__main__":
     pytest.main([__file__])

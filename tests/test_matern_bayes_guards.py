@@ -60,10 +60,10 @@ class TestG2:
 
 class TestG3:
     def test_registry_equals_spec(self):
-        """Method registry must be exactly {rff, lrff, ciq, pciq}."""
-        assert set(METHODS) == {"rff", "lrff", "ciq", "pciq"}, (
-            "G3: registry has changed — CG/Lanczos must remain absent."
-        )
+        """Method registry must match the Gaussian-sampler set (no CG/Lanczos)."""
+        assert set(METHODS) == {
+            "rff", "lrff", "elrff", "iw_rff", "stratified_rff", "ciq", "pciq",
+        }, "G3: registry has changed — CG/Lanczos must remain absent."
 
     def test_cg_absent(self):
         assert "cg" not in METHODS

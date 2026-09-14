@@ -424,16 +424,10 @@ def _sweep_config(
                 W, alpha_sel, Z_hat = resample_from_pool(
                     _sp, _sa, _sz, n_freq, trial_rng)
                 g = np.sqrt(Z_hat / (n_freq * alpha_sel))
-                K_acc = np.zeros((n, n), dtype=np.float64)
-                for start in range(0, n_freq, chunk_size):
-                    b = min(chunk_size, n_freq - start)
-                    W_b = W[start:start + b]
-                    g_b = g[start:start + b]
-                    v = (x @ W_b.T).astype(dtype)
-                    cv_w = (np.cos(v) * g_b).astype(dtype)
-                    sv_w = (np.sin(v) * g_b).astype(dtype)
-                    K_acc += cv_w @ cv_w.T + sv_w @ sv_w.T
-                Khat_xi = sigma * K_acc + noise_var * np.eye(n)
+                Khat_xi = _accumulate_khat(
+                    x, W, g, sigma, noise_var,
+                    chunk_size, dtype,
+                )
 
             elif method == "iw_rff":
                 # Safeguarded IW-RFF from samplers.py

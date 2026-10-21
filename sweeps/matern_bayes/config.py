@@ -109,9 +109,10 @@ def fidelity_grid(
 
     bound = fidelity_bound(method, n, n_eff)
     lo = max(2, bound / 10)
-    # RFF-family needs more headroom — CIQ converges by ~1× bound
+    # RFF-family needs more headroom — CIQ converges by ~1× bound.
+    # Hard cap at 500_000 to avoid runaway cost when n_eff is large (d>=2).
     if method in ("rff", "lrff", "elrff", "iw_rff", "stratified_rff"):
-        hi = bound * 100
+        hi = min(bound * 100, 500_000)
     else:
         hi = bound * 10
     raw = np.geomspace(lo, hi, n_points)

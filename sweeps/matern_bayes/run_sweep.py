@@ -298,7 +298,12 @@ def _sweep_config(
 
     rows: list[dict] = []
 
-    for fid in grid:
+    for fid_idx, fid in enumerate(grid):
+        if verbose:
+            print(
+                f"  fid {fid_idx+1}/{len(grid)}  D={fid}",
+                flush=True,
+            )
         tv_vals: list[float] = []
         p_star_vals: list[float] = []
         p_star_err_vals: list[float] = []
